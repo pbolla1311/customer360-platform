@@ -56,6 +56,11 @@ class OutboxEvent(Base):
         nullable=False,
     )
 
+    next_retry_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
