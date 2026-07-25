@@ -2,19 +2,21 @@
 name = "customer360-platform"
 version = "0.1.0"
 description = "Production-style Customer 360 lakehouse and analytics platform"
-requires-python = ">=3.11"
+requires-python = ">=3.9"
+
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "pydantic-settings>=2.5.0",
     "sqlalchemy>=2.0.0",
     "psycopg[binary]>=3.2.0",
+    "alembic>=1.13.0",
+    "python-dotenv>=1.0.1",
     "streamlit>=1.39.0",
     "pandas>=2.2.0",
     "pytest>=8.3.0",
     "httpx>=0.27.0",
 ]
-
 [project.optional-dependencies]
 dev = [
     "ruff>=0.7.0",
@@ -33,3 +35,22 @@ target-version = "py311"
 [tool.mypy]
 python_version = "3.11"
 strict = true
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["customer360*"]
+exclude = [
+    "apps*",
+    "airflow*",
+    "datasets*",
+    "dbt*",
+    "demo*",
+    "diagrams*",
+    "infrastructure*",
+    "ingestion*",
+    "quality*",
+    "spark*",
+    "tests*",
+]
