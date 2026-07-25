@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from time import perf_counter
-from typing import Any
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -9,6 +9,12 @@ from customer360.config import PROCESSED_DATA_DIR
 from customer360.infrastructure.repository import Customer360Repository
 from customer360.infrastructure.session import SessionLocal
 from customer360.logging_config import configure_logging
+from customer360.messaging.producer import CustomerEventProducer
+from customer360.messaging.schemas import (
+    CustomerEvent,
+    CustomerEventType,
+    CustomerProfilePayload,
+)
 
 SOURCE_FILE = PROCESSED_DATA_DIR / "customer360_gold.csv"
 DEFAULT_BATCH_SIZE = 1000
@@ -42,8 +48,43 @@ def dataframe_to_profiles(
     ]
 
 
+def profile_to_event(
+    profile: dict[str, Any],
+) -> CustomerEvent:
+    return CustomerEvent(
+        event_type=CustomerEventType.UPSERTED,
+        source="customer360-loader",
+        payload=CustomerProfilePayload(
+            customer_id=profile["customer_id"],
+            first_name=profile["first_name"],
+            last_name=profile["last_name"],
+            email=profile["email"],
+            city=profile["city"],
+            state=profile["state"],
+            transaction_count=profile["transaction_count"],
+            total_spend=profile["total_spend"],
+            average_transaction_value=profile[
+                "average_transaction_value"
+            ],
+        ),
+    )
+
+
+def publish_customer_events(
+    profiles: list[dict[str, Any]],
+    producer: CustomerEventProducer,
+) -> int:
+    for profile in profiles:
+        producer.publish(profile_to_event(profile))
+
+    producer.flush()
+
+    return len(profiles)
+
+
 def load_customer360(
     batch_size: int = DEFAULT_BATCH_SIZE,
+    producer: Optional[CustomerEventProducer] = None,
 ) -> int:
     if not SOURCE_FILE.exists():
         raise FileNotFoundError(
@@ -61,12 +102,24 @@ def load_customer360(
             batch_size=batch_size,
         )
 
+    event_producer = producer or CustomerEventProducer()
+
+    try:
+        published_count = publish_customer_events(
+            profiles,
+            event_producer,
+        )
+    finally:
+        if producer is None:
+            event_producer.close()
+
     elapsed_seconds = perf_counter() - started_at
 
     logger.info(
         "Customer360 bulk load completed",
         extra={
             "processed_count": processed_count,
+            "published_count": published_count,
             "batch_size": batch_size,
             "elapsed_seconds": round(elapsed_seconds, 3),
         },
