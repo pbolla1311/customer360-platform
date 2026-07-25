@@ -1,9 +1,13 @@
+import logging
+
 import pandas as pd
 
 from customer360.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 from customer360.ingestion.validation import validate_customers
-from customer360.ingestion.validation import validate_customers
-from config import RAW_DATA_DIR, PROCESSED_DATA_DIR
+from customer360.logging_config import configure_logging
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 RAW_FILE = RAW_DATA_DIR / "customers.csv"
 PROCESSED_FILE = PROCESSED_DATA_DIR / "customers_cleaned.csv"
@@ -49,9 +53,9 @@ def main() -> None:
 
     cleaned_customers = clean_customers(customers)
     save_customers(cleaned_customers)
-
-    print(f"Processed {len(cleaned_customers)} customer records.")
-    print(f"Output written to: {PROCESSED_FILE}")
+    
+    logger.info("Processed %s customer records.", len(cleaned_customers))
+    logger.info("Output written to: %s", PROCESSED_FILE)
 
 
 if __name__ == "__main__":
