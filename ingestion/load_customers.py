@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pandas as pd
-
+from validation import validate_customers
 
 RAW_FILE = Path("datasets/raw/customers.csv")
 PROCESSED_FILE = Path("datasets/processed/customers_cleaned.csv")
@@ -44,6 +44,8 @@ def save_customers(df: pd.DataFrame) -> None:
 
 def main() -> None:
     customers = load_customers()
+    validate_customers(customers)
+
     cleaned_customers = clean_customers(customers)
     save_customers(cleaned_customers)
 
