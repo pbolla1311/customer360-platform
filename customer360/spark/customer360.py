@@ -1,6 +1,9 @@
+import logging
 from pathlib import Path
 
 import pandas as pd
+
+from customer360.logging_config import configure_logging
 
 
 CUSTOMERS_FILE = Path("datasets/processed/customers_cleaned.csv")
@@ -8,6 +11,9 @@ TRANSACTIONS_FILE = Path(
     "datasets/processed/transactions_cleaned.csv"
 )
 OUTPUT_FILE = Path("datasets/processed/customer360_gold.csv")
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 
 def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -30,6 +36,8 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
 def build_transaction_metrics(
     transactions: pd.DataFrame,
 ) -> pd.DataFrame:
+    transactions = transactions.copy()
+
     transactions["transaction_date"] = pd.to_datetime(
         transactions["transaction_date"],
         errors="coerce",
@@ -140,12 +148,14 @@ def main() -> None:
 
     save_customer360(customer360)
 
-    print(
-        f"Created Customer 360 profiles for "
-        f"{len(customer360)} customers."
+    logger.info(
+        "Created Customer 360 profiles for %s customers.",
+        len(customer360),
     )
-
-    print(f"Output written to: {OUTPUT_FILE}")
+    logger.info(
+        "Output written to: %s",
+        OUTPUT_FILE,
+    )
 
 
 if __name__ == "__main__":

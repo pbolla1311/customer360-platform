@@ -1,6 +1,9 @@
+import logging
 from pathlib import Path
 
 import pandas as pd
+
+from customer360.logging_config import configure_logging
 
 
 RAW_FILE = Path("datasets/raw/transactions.csv")
@@ -14,6 +17,9 @@ REQUIRED_COLUMNS = {
     "category",
     "payment_method",
 }
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 
 def load_transactions() -> pd.DataFrame:
@@ -118,8 +124,14 @@ def main() -> None:
     cleaned_transactions = clean_transactions(transactions)
     save_transactions(cleaned_transactions)
 
-    print(f"Processed {len(cleaned_transactions)} transaction records.")
-    print(f"Output written to: {PROCESSED_FILE}")
+    logger.info(
+        "Processed %s transaction records.",
+        len(cleaned_transactions),
+    )
+    logger.info(
+        "Output written to: %s",
+        PROCESSED_FILE,
+    )
 
 
 if __name__ == "__main__":
