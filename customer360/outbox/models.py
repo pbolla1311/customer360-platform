@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from customer360.infrastructure.models import Base
@@ -12,11 +12,7 @@ from customer360.infrastructure.models import Base
 class OutboxEvent(Base):
     __tablename__ = "outbox_events"
 
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     event_id: Mapped[str] = mapped_column(
         String(36),
@@ -40,6 +36,24 @@ class OutboxEvent(Base):
         default="PENDING",
         nullable=False,
         index=True,
+    )
+
+    retry_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    max_retries: Mapped[int] = mapped_column(
+        Integer,
+        default=5,
+        nullable=False,
+    )
+
+    dead_lettered: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
     )
 
     created_at: Mapped[datetime] = mapped_column(
