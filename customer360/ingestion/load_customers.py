@@ -2,7 +2,7 @@ import pandas as pd
 
 from customer360.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 from customer360.ingestion.validation import validate_customers
-from ingestion.validation import validate_customers
+from customer360.ingestion.validation import validate_customers
 from config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 
 RAW_FILE = RAW_DATA_DIR / "customers.csv"
