@@ -1,6 +1,6 @@
 import pandas as pd
 
-from spark.customer360 import (
+from customer360.spark.customer360 import (
     build_customer360,
     build_transaction_metrics,
 )

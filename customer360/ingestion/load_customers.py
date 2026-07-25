@@ -1,11 +1,12 @@
-from pathlib import Path
-
 import pandas as pd
-from validation import validate_customers
 
-RAW_FILE = Path("datasets/raw/customers.csv")
-PROCESSED_FILE = Path("datasets/processed/customers_cleaned.csv")
+from customer360.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
+from customer360.ingestion.validation import validate_customers
+from ingestion.validation import validate_customers
+from config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 
+RAW_FILE = RAW_DATA_DIR / "customers.csv"
+PROCESSED_FILE = PROCESSED_DATA_DIR / "customers_cleaned.csv"
 
 def load_customers() -> pd.DataFrame:
     if not RAW_FILE.exists():

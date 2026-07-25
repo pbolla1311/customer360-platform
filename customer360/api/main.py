@@ -1,13 +1,11 @@
 import sqlite3
-
+from customer360.config import API_TITLE, API_VERSION, DATABASE_FILE
 from fastapi import FastAPI, HTTPException
 
 app = FastAPI(
-    title="Customer360 API",
-    version="1.0.0",
+    title=API_TITLE,
+    version=API_VERSION,
 )
-
-DATABASE = "customer360.db"
 
 
 @app.get("/")
@@ -20,7 +18,7 @@ def root():
 
 @app.get("/customers")
 def get_customers():
-    connection = sqlite3.connect(DATABASE)
+connection = sqlite3.connect(DATABASE_FILE)
     connection.row_factory = sqlite3.Row
 
     rows = connection.execute(
@@ -38,7 +36,7 @@ def get_customers():
 
 @app.get("/customers/{customer_id}")
 def get_customer(customer_id: int):
-    connection = sqlite3.connect(DATABASE)
+    connection = sqlite3.connect(DATABASE_FILE)
     connection.row_factory = sqlite3.Row
 
     row = connection.execute(

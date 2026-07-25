@@ -1,12 +1,13 @@
-from pathlib import Path
 
 import pandas as pd
 
-from database import get_connection, initialize_database
+from customer360.config import PROCESSED_DATA_DIR
+from customer360.infrastructure.database import (
+    get_connection,
+    initialize_database,
+)
 
-
-SOURCE_FILE = Path("datasets/processed/customer360_gold.csv")
-
+SOURCE_FILE = PROCESSED_DATA_DIR / "customer360_gold.csv"
 
 def load_customer360() -> None:
     if not SOURCE_FILE.exists():

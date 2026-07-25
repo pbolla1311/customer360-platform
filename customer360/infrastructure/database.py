@@ -1,9 +1,7 @@
-from pathlib import Path
 import sqlite3
 
 
-DATABASE_FILE = Path("customer360.db")
-
+from customer360.config import DATABASE_FILE
 
 def get_connection() -> sqlite3.Connection:
     DATABASE_FILE.parent.mkdir(parents=True, exist_ok=True)
