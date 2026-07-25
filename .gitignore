@@ -38,3 +38,6 @@ dbt/dbt_packages/
 # Airflow
 airflow/logs/
 airflow/airflow.db
+
+# Local databases
+*.db
