@@ -1,3 +1,4 @@
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 
@@ -35,6 +36,20 @@ def root() -> dict[str, str]:
     return {
         "application": "Customer360 Platform",
         "status": "running",
+        "version": API_VERSION,
+    }
+
+
+@app.get("/health")
+@v1.get("/health")
+def health(
+    session: Session = Depends(get_db_session),
+) -> dict[str, str]:
+    session.execute(text("SELECT 1"))
+
+    return {
+        "status": "healthy",
+        "database": "connected",
         "version": API_VERSION,
     }
 
