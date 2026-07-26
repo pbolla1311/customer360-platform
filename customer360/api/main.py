@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from customer360.api.security import verify_api_key
 from customer360.config import API_TITLE, API_VERSION
 from customer360.infrastructure.models import Customer360Profile
 from customer360.infrastructure.repository import Customer360Repository
@@ -152,11 +153,13 @@ def readiness(
     "/customers",
     response_model=list[CustomerProfileResponse],
     summary="List customer profiles",
+    dependencies=[Depends(verify_api_key)],
 )
 @v1.get(
     "/customers",
     response_model=list[CustomerProfileResponse],
     summary="List customer profiles",
+    dependencies=[Depends(verify_api_key)],
 )
 def get_customers(
     session: Session = Depends(get_db_session),
@@ -176,6 +179,7 @@ def get_customers(
         }
     },
     summary="Get customer profile",
+    dependencies=[Depends(verify_api_key)],
 )
 @v1.get(
     "/customers/{customer_id}",
@@ -187,6 +191,7 @@ def get_customers(
         }
     },
     summary="Get customer profile",
+    dependencies=[Depends(verify_api_key)],
 )
 def get_customer(
     customer_id: str,
