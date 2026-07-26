@@ -41,3 +41,12 @@ airflow/airflow.db
 
 # Local databases
 *.db
+
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example

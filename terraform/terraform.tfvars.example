@@ -1,0 +1,13 @@
+project_name  = "customer360"
+environment   = "dev"
+aws_region    = "us-east-1"
+vpc_cidr      = "10.0.0.0/16"
+
+availability_zones = [
+  "us-east-1a",
+  "us-east-1b",
+]
+
+database_name           = "customer360"
+database_username       = "customer360_admin"
+database_instance_class = "db.t4g.micro"
