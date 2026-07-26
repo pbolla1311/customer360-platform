@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from customer360.api.audit_logging import AuditLoggingMiddleware
 from customer360.api.security import verify_api_key
 from customer360.api.security_headers import SecurityHeadersMiddleware
 from customer360.config import (
@@ -29,6 +30,9 @@ from customer360.config import (
 from customer360.infrastructure.models import Customer360Profile
 from customer360.infrastructure.repository import Customer360Repository
 from customer360.infrastructure.session import get_db_session
+from customer360.logging_config import configure_logging
+
+configure_logging()
 
 
 class RootResponse(BaseModel):
@@ -91,16 +95,19 @@ app.add_middleware(
         "Accept",
         "Content-Type",
         "X-API-Key",
+        "X-Request-ID",
     ],
     expose_headers=[
         "X-RateLimit-Limit",
         "X-RateLimit-Remaining",
         "Retry-After",
+        "X-Request-ID",
     ],
     max_age=600,
 )
 
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(AuditLoggingMiddleware)
 
 app.state.limiter = limiter
 app.add_exception_handler(
@@ -239,7 +246,7 @@ def get_customers(
             "model": ErrorResponse,
             "description": "Customer not found",
         },
-        status.HTTP_422_UNPROCESSABLE_ENTITY: {
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "model": ErrorResponse,
             "description": "Invalid customer ID",
         },
@@ -259,7 +266,7 @@ def get_customers(
             "model": ErrorResponse,
             "description": "Customer not found",
         },
-        status.HTTP_422_UNPROCESSABLE_ENTITY: {
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "model": ErrorResponse,
             "description": "Invalid customer ID",
         },
