@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from confluent_kafka import KafkaException, Producer
 
@@ -18,6 +18,7 @@ class CustomerEventProducer:
         producer: Optional[Producer] = None,
     ) -> None:
         self.settings = settings or KafkaSettings.from_env()
+
         self._producer = producer or Producer(
             {
                 "bootstrap.servers": self.settings.bootstrap_servers,
@@ -30,10 +31,7 @@ class CustomerEventProducer:
     @staticmethod
     def _delivery_callback(error: Any, message: Any) -> None:
         if error is not None:
-            logger.error(
-                "Kafka delivery failed",
-                extra={"error": str(error)},
-            )
+            logger.error("Kafka delivery failed", extra={"error": str(error)})
             return
 
         logger.info(
@@ -45,29 +43,45 @@ class CustomerEventProducer:
             },
         )
 
-    def publish(self, event: CustomerEvent) -> None:
+    def publish(
+        self,
+        event: CustomerEvent,
+        topic: Optional[str] = None,
+    ) -> None:
         try:
             self._producer.produce(
-                topic=self.settings.topic,
-                key=event.payload.customer_id.encode("utf-8"),
-                value=event.model_dump_json().encode("utf-8"),
+                topic=topic or self.settings.topic,
+                key=event.payload.customer_id.encode(),
+                value=event.model_dump_json().encode(),
                 on_delivery=self._delivery_callback,
             )
             self._producer.poll(0)
+
         except BufferError as exc:
-            logger.exception("Kafka producer queue is full")
+            logger.exception("Kafka producer queue full")
             raise KafkaException(str(exc)) from exc
+
         except KafkaException:
-            logger.exception("Kafka event publish failed")
+            logger.exception("Kafka publish failed")
+
+            # Publish to dead-letter topic
+            if topic != f"{self.settings.topic}.dlq":
+                self.publish(
+                    event,
+                    topic=f"{self.settings.topic}.dlq",
+                )
+
             raise
 
     def flush(self, timeout: float = 10.0) -> None:
         remaining = self._producer.flush(timeout)
 
-        if remaining > 0:
+        if remaining:
             raise KafkaException(
                 f"{remaining} Kafka message(s) were not delivered before timeout"
+
             )
+            
 
     def close(self) -> None:
         self.flush()
