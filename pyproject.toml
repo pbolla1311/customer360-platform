@@ -17,6 +17,7 @@ dependencies = [
     "httpx>=0.27.0",
     "confluent-kafka>=2.11.0",
     "prometheus-client>=0.22.1",
+    "slowapi>=0.1.9",
 ]
 
 [project.optional-dependencies]

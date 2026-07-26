@@ -1,8 +1,11 @@
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -51,6 +54,11 @@ class CustomerProfileResponse(BaseModel):
     updated_at: datetime
 
 
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=[],
+)
+
 app = FastAPI(
     title=API_TITLE,
     version=API_VERSION,
@@ -59,6 +67,9 @@ app = FastAPI(
     redoc_url="/redoc",
     openapi_url="/openapi.json",
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 v1 = APIRouter(prefix="/api/v1", tags=["v1"])
 
@@ -154,14 +165,28 @@ def readiness(
     response_model=list[CustomerProfileResponse],
     summary="List customer profiles",
     dependencies=[Depends(verify_api_key)],
+    responses={
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "model": ErrorResponse,
+            "description": "Rate limit exceeded",
+        }
+    },
 )
 @v1.get(
     "/customers",
     response_model=list[CustomerProfileResponse],
     summary="List customer profiles",
     dependencies=[Depends(verify_api_key)],
+    responses={
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "model": ErrorResponse,
+            "description": "Rate limit exceeded",
+        }
+    },
 )
+@limiter.limit("60/minute")
 def get_customers(
+    request: Request,
     session: Session = Depends(get_db_session),
 ) -> list[dict[str, Any]]:
     repository = Customer360Repository(session)
@@ -176,7 +201,11 @@ def get_customers(
         status.HTTP_404_NOT_FOUND: {
             "model": ErrorResponse,
             "description": "Customer not found",
-        }
+        },
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "model": ErrorResponse,
+            "description": "Rate limit exceeded",
+        },
     },
     summary="Get customer profile",
     dependencies=[Depends(verify_api_key)],
@@ -188,12 +217,18 @@ def get_customers(
         status.HTTP_404_NOT_FOUND: {
             "model": ErrorResponse,
             "description": "Customer not found",
-        }
+        },
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "model": ErrorResponse,
+            "description": "Rate limit exceeded",
+        },
     },
     summary="Get customer profile",
     dependencies=[Depends(verify_api_key)],
 )
+@limiter.limit("120/minute")
 def get_customer(
+    request: Request,
     customer_id: str,
     session: Session = Depends(get_db_session),
 ) -> dict[str, Any]:
