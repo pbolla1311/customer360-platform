@@ -1,8 +1,7 @@
 [project]
 name = "customer360-platform"
 version = "0.1.0"
-description = "Production-style Customer 360 lakehouse and analytics platform"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 
 dependencies = [
     "fastapi>=0.115.0",
@@ -17,6 +16,7 @@ dependencies = [
     "pytest>=8.3.0",
     "httpx>=0.27.0",
     "confluent-kafka>=2.11.0",
+    "prometheus-client>=0.22.1",
 ]
 
 [project.optional-dependencies]
@@ -50,13 +50,4 @@ include = ["customer360*"]
 exclude = [
     "apps*",
     "airflow*",
-    "datasets*",
-    "dbt*",
-    "demo*",
-    "diagrams*",
-    "infrastructure*",
-    "ingestion*",
-    "quality*",
-    "spark*",
-    "tests*",
 ]
