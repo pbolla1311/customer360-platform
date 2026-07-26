@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: customer360
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: customer360
+
+  template:
+    metadata:
+      labels:
+        app: customer360
+
+    spec:
+      containers:
+        - name: customer360
+
+          image: customer360:latest
+
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - containerPort: 8000
+
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
