@@ -2,7 +2,7 @@ import logging
 
 import pandas as pd
 
-from customer360.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
+from customer360.config import PROCESSED_DATA_DIR, RAW_DATA_DIR
 from customer360.ingestion.validation import validate_customers
 from customer360.logging_config import configure_logging
 

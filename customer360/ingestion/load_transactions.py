@@ -5,7 +5,6 @@ import pandas as pd
 
 from customer360.logging_config import configure_logging
 
-
 RAW_FILE = Path("datasets/raw/transactions.csv")
 PROCESSED_FILE = Path("datasets/processed/transactions_cleaned.csv")
 
