@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 
 from customer360.config import API_TITLE, API_VERSION
 from customer360.infrastructure.models import Customer360Profile
@@ -10,6 +10,8 @@ app = FastAPI(
     title=API_TITLE,
     version=API_VERSION,
 )
+
+v1 = APIRouter(prefix="/api/v1", tags=["v1"])
 
 
 def serialize_profile(profile: Customer360Profile) -> dict[str, object]:
@@ -33,20 +35,22 @@ def root() -> dict[str, str]:
     return {
         "application": "Customer360 Platform",
         "status": "running",
+        "version": API_VERSION,
     }
 
 
 @app.get("/customers")
+@v1.get("/customers")
 def get_customers(
     session: Session = Depends(get_db_session),
 ) -> list[dict[str, object]]:
     repository = Customer360Repository(session)
     profiles = repository.list_all()
-
     return [serialize_profile(profile) for profile in profiles]
 
 
 @app.get("/customers/{customer_id}")
+@v1.get("/customers/{customer_id}")
 def get_customer(
     customer_id: str,
     session: Session = Depends(get_db_session),
@@ -61,3 +65,6 @@ def get_customer(
         )
 
     return serialize_profile(profile)
+
+
+app.include_router(v1)
