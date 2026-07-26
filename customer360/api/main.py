@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -12,7 +13,11 @@ from sqlalchemy.orm import Session
 
 from customer360.api.security import verify_api_key
 from customer360.api.security_headers import SecurityHeadersMiddleware
-from customer360.config import API_TITLE, API_VERSION
+from customer360.config import (
+    API_TITLE,
+    API_VERSION,
+    CORS_ALLOWED_ORIGINS,
+)
 from customer360.infrastructure.models import Customer360Profile
 from customer360.infrastructure.repository import Customer360Repository
 from customer360.infrastructure.session import get_db_session
@@ -67,6 +72,24 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET"],
+    allow_headers=[
+        "Accept",
+        "Content-Type",
+        "X-API-Key",
+    ],
+    expose_headers=[
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "Retry-After",
+    ],
+    max_age=600,
 )
 
 app.add_middleware(SecurityHeadersMiddleware)
