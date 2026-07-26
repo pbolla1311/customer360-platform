@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -56,18 +55,18 @@ class OutboxEvent(Base):
         nullable=False,
     )
 
-    next_retry_at: Mapped[Optional[datetime]] = mapped_column(
+    next_retry_at: Mapped[datetime | None] = mapped_column(
         DateTime,
         nullable=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
         nullable=False,
     )
 
-    published_at: Mapped[Optional[datetime]] = mapped_column(
+    published_at: Mapped[datetime | None] = mapped_column(
         DateTime,
         nullable=True,
     )

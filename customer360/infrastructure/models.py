@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+
 from sqlalchemy import DateTime, Float, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,11 +20,11 @@ class Customer360Profile(Base):
         unique=True,
         index=True,
     )
-    city: Mapped[Optional[str]] = mapped_column(
+    city: Mapped[str | None] = mapped_column(
         String(100),
         nullable=True,
     )
-    state: Mapped[Optional[str]] = mapped_column(
+    state: Mapped[str | None] = mapped_column(
         String(100),
         nullable=True,
     )

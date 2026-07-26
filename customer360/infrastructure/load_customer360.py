@@ -1,7 +1,7 @@
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from time import perf_counter
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 def dataframe_to_profiles(
     dataframe: pd.DataFrame,
 ) -> list[dict[str, Any]]:
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
 
     return [
         {
@@ -84,7 +84,7 @@ def publish_customer_events(
 
 def load_customer360(
     batch_size: int = DEFAULT_BATCH_SIZE,
-    producer: Optional[CustomerEventProducer] = None,
+    producer: CustomerEventProducer | None = None,
 ) -> int:
     if not SOURCE_FILE.exists():
         raise FileNotFoundError(

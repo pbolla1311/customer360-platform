@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from confluent_kafka import KafkaException, Producer
 
@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 class CustomerEventProducer:
     def __init__(
         self,
-        settings: Optional[KafkaSettings] = None,
-        producer: Optional[Producer] = None,
+        settings: KafkaSettings | None = None,
+        producer: Producer | None = None,
     ) -> None:
         self.settings = settings or KafkaSettings.from_env()
 
@@ -46,7 +46,7 @@ class CustomerEventProducer:
     def publish(
         self,
         event: CustomerEvent,
-        topic: Optional[str] = None,
+        topic: str | None = None,
     ) -> None:
         try:
             self._producer.produce(

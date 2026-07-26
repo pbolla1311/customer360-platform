@@ -12,7 +12,7 @@ class KafkaSettings:
     auto_offset_reset: str
 
     @classmethod
-    def from_env(cls) -> "KafkaSettings":
+    def from_env(cls) -> KafkaSettings:
         return cls(
             bootstrap_servers=os.getenv(
                 "KAFKA_BOOTSTRAP_SERVERS",

@@ -2,7 +2,6 @@ import re
 
 import pandas as pd
 
-
 REQUIRED_COLUMNS = {
     "customer_id",
     "first_name",

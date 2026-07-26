@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -30,7 +30,7 @@ class OutboxRepository:
         return event
 
     def pending(self) -> list[OutboxEvent]:
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(UTC).replace(tzinfo=None)
 
         stmt = (
             select(OutboxEvent)
@@ -56,7 +56,7 @@ class OutboxRepository:
         else:
             delay = 2 ** event.retry_count
             event.next_retry_at = (
-                datetime.now(timezone.utc).replace(tzinfo=None)
+                datetime.now(UTC).replace(tzinfo=None)
                 + timedelta(seconds=delay)
             )
 
@@ -64,6 +64,6 @@ class OutboxRepository:
 
     def mark_published(self, event: OutboxEvent) -> None:
         event.status = "PUBLISHED"
-        event.published_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        event.published_at = datetime.now(UTC).replace(tzinfo=None)
         event.next_retry_at = None
         self.session.commit()

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterator, Optional, Set
+from collections.abc import Iterator
+from uuid import UUID
 
 from confluent_kafka import Consumer
 
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 class CustomerEventConsumer:
     def __init__(
         self,
-        settings: Optional[KafkaSettings] = None,
+        settings: KafkaSettings | None = None,
     ) -> None:
         self.settings = settings or KafkaSettings.from_env()
 
@@ -29,7 +30,7 @@ class CustomerEventConsumer:
 
         self._consumer.subscribe([self.settings.topic])
 
-        self._processed_event_ids: Set[str] = set()
+        self._processed_event_ids: set[UUID] = set()
 
     def consume(self, timeout: float = 1.0) -> Iterator[CustomerEvent]:
         while True:
@@ -42,7 +43,14 @@ class CustomerEventConsumer:
                 logger.error("Kafka consumer error: %s", message.error())
                 continue
 
-            event = CustomerEvent.model_validate_json(message.value())
+            message_value = message.value()
+
+            if message_value is None:
+                logger.warning("Skipping Kafka message with an empty value")
+                self._consumer.commit(message=message)
+                continue
+
+            event = CustomerEvent.model_validate_json(message_value)
 
             if event.event_id in self._processed_event_ids:
                 logger.info("Skipping duplicate event %s", event.event_id)
