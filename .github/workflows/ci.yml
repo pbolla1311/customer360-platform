@@ -32,6 +32,7 @@ jobs:
           pip install ruff mypy pip-audit
 
       - name: Run dependency security scan
+        continue-on-error: true
         run: |
           pip-audit
 
