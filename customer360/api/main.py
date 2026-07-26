@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from customer360.api.security import verify_api_key
+from customer360.api.security_headers import SecurityHeadersMiddleware
 from customer360.config import API_TITLE, API_VERSION
 from customer360.infrastructure.models import Customer360Profile
 from customer360.infrastructure.repository import Customer360Repository
@@ -68,11 +69,14 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
+app.add_middleware(SecurityHeadersMiddleware)
+
 app.state.limiter = limiter
 app.add_exception_handler(
     RateLimitExceeded,
     cast(Any, _rate_limit_exceeded_handler),
 )
+
 v1 = APIRouter(prefix="/api/v1", tags=["v1"])
 
 
