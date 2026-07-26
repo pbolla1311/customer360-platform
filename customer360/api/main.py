@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict
@@ -69,9 +69,9 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(  # type: ignore[arg-type]
+app.add_exception_handler(
     RateLimitExceeded,
-    _rate_limit_exceeded_handler,
+    cast(Any, _rate_limit_exceeded_handler),
 )
 v1 = APIRouter(prefix="/api/v1", tags=["v1"])
 
