@@ -29,3 +29,10 @@ CORS_ALLOWED_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+
+# Placeholder constant: no LinkedIn profile URL exists anywhere in this
+# repository, so the landing page must not invent one. Left unset, the
+# author's LinkedIn link renders as a clearly-marked, non-interactive
+# placeholder instead of a fabricated or broken URL. Set this env var to
+# the real profile URL to enable the link.
+AUTHOR_LINKEDIN_URL = os.getenv("AUTHOR_LINKEDIN_URL", "").strip()

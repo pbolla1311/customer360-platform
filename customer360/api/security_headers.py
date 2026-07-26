@@ -30,6 +30,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "default-src 'self'; "
             "script-src 'self'; "
             f"style-src 'self' 'nonce-{request.state.csp_nonce}'; "
+            # The landing page's GitHub stats widget fetches repo/release
+            # metadata client-side from the public GitHub REST API (no
+            # token, CORS-enabled). This is the one explicit exception to
+            # same-origin-only network access; it does not touch
+            # script-src/style-src, so it adds no path to inline or
+            # third-party code execution.
+            "connect-src 'self' https://api.github.com; "
             "frame-ancestors 'none'; "
             "base-uri 'self'; "
             "form-action 'self'"

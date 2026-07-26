@@ -1,3 +1,4 @@
+import html
 from datetime import datetime
 from pathlib import Path as FilesystemPath
 from typing import Any, cast
@@ -29,6 +30,7 @@ from customer360.api.security_headers import SecurityHeadersMiddleware
 from customer360.config import (
     API_TITLE,
     API_VERSION,
+    AUTHOR_LINKEDIN_URL,
     CORS_ALLOWED_ORIGINS,
 )
 from customer360.infrastructure.models import Customer360Profile
@@ -123,11 +125,28 @@ STATIC_DIR = FilesystemPath(__file__).resolve().parent / "static"
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+
+def _linkedin_link_html(css_class: str) -> str:
+    if AUTHOR_LINKEDIN_URL:
+        href = html.escape(AUTHOR_LINKEDIN_URL, quote=True)
+        return (
+            f'<a class="{css_class}" href="{href}" '
+            'target="_blank" rel="noopener noreferrer">LinkedIn</a>'
+        )
+
+    return (
+        f'<span class="{css_class} link-placeholder" aria-disabled="true" '
+        'title="LinkedIn profile not yet configured">LinkedIn</span>'
+    )
+
+
 LANDING_PAGE_HTML = (
     (STATIC_DIR / "site" / "index.html")
     .read_text()
     .replace("{{APP_TITLE}}", API_TITLE)
     .replace("{{APP_VERSION}}", API_VERSION)
+    .replace("{{LINKEDIN_LINK_AUTHOR}}", _linkedin_link_html("author-link"))
+    .replace("{{LINKEDIN_LINK_FOOTER}}", _linkedin_link_html("footer-link"))
 )
 
 

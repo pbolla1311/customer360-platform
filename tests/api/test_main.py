@@ -4,6 +4,10 @@ import re
 from fastapi.testclient import TestClient
 
 os.environ["API_KEY"] = "test-api-key"
+# Forces the landing page's LinkedIn link into its unconfigured, placeholder
+# state regardless of what's set in the ambient environment, so the
+# placeholder-safety tests are deterministic.
+os.environ["AUTHOR_LINKEDIN_URL"] = ""
 
 from customer360.api.main import app
 
@@ -13,6 +17,10 @@ AUTH_HEADERS = {"X-API-Key": "test-api-key"}
 
 # Matches a <script> tag with no src attribute, i.e. an inline script body.
 INLINE_SCRIPT_PATTERN = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>.*?</script>", re.DOTALL)
+
+# Matches a <style> tag, i.e. an inline style block (as opposed to a
+# <link rel="stylesheet">).
+INLINE_STYLE_PATTERN = re.compile(r"<style[^>]*>.*?</style>", re.DOTALL)
 
 
 def test_root_returns_html_landing_page():
@@ -39,6 +47,12 @@ def test_root_landing_page_has_no_inline_script():
     assert INLINE_SCRIPT_PATTERN.findall(response.text) == []
 
 
+def test_root_landing_page_has_no_inline_style():
+    response = client.get("/")
+
+    assert INLINE_STYLE_PATTERN.findall(response.text) == []
+
+
 def test_root_landing_page_assets_resolve():
     response = client.get("/")
 
@@ -50,11 +64,127 @@ def test_root_landing_page_assets_resolve():
 
     asset_urls = script_srcs + stylesheet_hrefs + image_srcs
     assert asset_urls, "expected the landing page to reference local assets"
+    assert "/static/site/github-stats.js" in script_srcs
 
     for url in asset_urls:
         assert url.startswith("/static/"), url
         asset_response = client.get(url)
         assert asset_response.status_code == 200, url
+
+
+def test_root_landing_page_has_github_stats_container():
+    response = client.get("/")
+
+    assert 'id="github-stats"' in response.text
+    for stat_id in ("stat-stars", "stat-forks", "stat-license", "stat-release"):
+        assert f'id="{stat_id}"' in response.text
+
+
+def test_root_landing_page_has_five_live_deployment_links():
+    response = client.get("/")
+
+    assert response.text.count('class="demo-card"') == 5
+    for href in ("/", "/docs", "/redoc", "/openapi.json", "/health"):
+        assert f'href="{href}"' in response.text, href
+
+
+def test_root_landing_page_new_tab_links_use_noopener_noreferrer():
+    response = client.get("/")
+
+    new_tab_links = re.findall(
+        r'<a\b[^>]*target="_blank"[^>]*>', response.text
+    )
+    assert new_tab_links, "expected at least one link that opens in a new tab"
+    for tag in new_tab_links:
+        assert 'rel="noopener noreferrer"' in tag, tag
+
+
+def test_root_landing_page_shows_author_name_and_role():
+    response = client.get("/")
+
+    assert "Built by Prakhyath Bolla" in response.text
+    assert "Data Engineer" in response.text
+
+
+def test_root_landing_page_github_links_are_correct():
+    response = client.get("/")
+
+    assert 'href="https://github.com/pbolla1311"' in response.text
+    assert (
+        'href="https://github.com/pbolla1311/customer360-platform"'
+        in response.text
+    )
+
+
+def test_root_landing_page_linkedin_placeholder_is_safe_when_unconfigured():
+    response = client.get("/")
+
+    assert "linkedin.com" not in response.text.lower()
+
+    placeholders = re.findall(
+        r'<span[^>]*class="[^"]*link-placeholder[^"]*"[^>]*>.*?</span>',
+        response.text,
+        re.DOTALL,
+    )
+    assert placeholders, "expected a placeholder element for the unset LinkedIn link"
+    for placeholder in placeholders:
+        assert "href=" not in placeholder
+        assert 'aria-disabled="true"' in placeholder
+
+
+def test_root_landing_page_architecture_image_opens_in_new_tab():
+    response = client.get("/")
+
+    match = re.search(
+        r'<a\b[^>]*class="arch-panel arch-link"[^>]*>.*?</a>',
+        response.text,
+        re.DOTALL,
+    )
+    assert match is not None, "expected the architecture image to be wrapped in a link"
+
+    link_html = match.group(0)
+    assert 'href="/static/site/architecture.png"' in link_html
+    assert 'target="_blank"' in link_html
+    assert 'rel="noopener noreferrer"' in link_html
+
+    img_match = re.search(r'<img\b[^>]*>', link_html)
+    assert img_match is not None, "expected an <img> inside the architecture link"
+    img_tag = img_match.group(0)
+    assert 'src="/static/site/architecture.png"' in img_tag
+    alt_match = re.search(r'alt="([^"]+)"', img_tag)
+    assert alt_match is not None and alt_match.group(1).strip(), (
+        "expected meaningful alt text on the architecture image"
+    )
+
+
+def test_root_landing_page_footer_has_required_content_and_links():
+    response = client.get("/")
+
+    assert "Built with FastAPI" in response.text
+    assert "PostgreSQL" in response.text
+    assert "Kafka" in response.text
+    assert "Created by Prakhyath Bolla" in response.text
+
+    footer_match = re.search(
+        r"<footer\b.*?</footer>", response.text, re.DOTALL
+    )
+    assert footer_match is not None
+    footer_html = footer_match.group(0)
+
+    assert 'href="https://github.com/pbolla1311/customer360-platform"' in footer_html
+    assert 'href="/docs"' in footer_html
+    assert 'href="/redoc"' in footer_html
+    assert 'href="/health"' in footer_html
+    assert "v1.0" in footer_html or "v{{" not in footer_html
+
+
+def test_csp_connect_src_allows_only_github_api():
+    response = client.get("/")
+
+    csp = response.headers["Content-Security-Policy"]
+    assert "connect-src 'self' https://api.github.com" in csp
+    assert "unsafe-inline" not in csp
+    assert "unsafe-eval" not in csp
 
 
 def test_status_returns_previous_root_json_response():
