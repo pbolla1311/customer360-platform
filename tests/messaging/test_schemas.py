@@ -1,4 +1,4 @@
-from datetime import timezone
+from datetime import UTC
 
 import pytest
 from pydantic import ValidationError
@@ -55,7 +55,7 @@ def test_customer_event_generates_metadata() -> None:
     )
 
     assert event.event_id is not None
-    assert event.occurred_at.tzinfo == timezone.utc
+    assert event.occurred_at.tzinfo == UTC
     assert event.source == "customer360-platform"
 
 

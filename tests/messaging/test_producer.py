@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pytest
 from confluent_kafka import KafkaException
@@ -16,13 +16,13 @@ class FakeProducer:
     def __init__(
         self,
         flush_result: int = 0,
-        produce_error: Optional[Exception] = None,
+        produce_error: Exception | None = None,
     ) -> None:
         self.flush_result = flush_result
         self.produce_error = produce_error
-        self.messages: List[Dict[str, Any]] = []
-        self.poll_calls: List[float] = []
-        self.flush_calls: List[float] = []
+        self.messages: list[dict[str, Any]] = []
+        self.poll_calls: list[float] = []
+        self.flush_calls: list[float] = []
 
     def produce(self, **kwargs: Any) -> None:
         if self.produce_error is not None:

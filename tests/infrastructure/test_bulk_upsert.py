@@ -2,7 +2,6 @@ from datetime import datetime
 
 import pytest
 
-from customer360.infrastructure.models import Customer360Profile
 from customer360.infrastructure.repository import Customer360Repository
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 import pandas as pd
 
@@ -14,7 +14,7 @@ from customer360.messaging.schemas import CustomerEventType
 
 class FakeProducer:
     def __init__(self) -> None:
-        self.events: List[Any] = []
+        self.events: list[Any] = []
         self.flush_calls = 0
 
     def publish(self, event: Any) -> None:
@@ -66,7 +66,7 @@ def test_dataframe_to_profiles_maps_rows() -> None:
 
 
 def test_profile_to_event_creates_upserted_event() -> None:
-    profile: Dict[str, Any] = dataframe_to_profiles(
+    profile: dict[str, Any] = dataframe_to_profiles(
         sample_dataframe()
     )[0]
 
