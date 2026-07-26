@@ -15,11 +15,56 @@ AUTH_HEADERS = {"X-API-Key": "test-api-key"}
 INLINE_SCRIPT_PATTERN = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>.*?</script>", re.DOTALL)
 
 
-def test_root():
+def test_root_returns_html_landing_page():
     response = client.get("/")
 
     assert response.status_code == 200
-    assert response.json()["status"] == "running"
+    assert response.headers["content-type"].startswith("text/html")
+
+
+def test_root_landing_page_links_to_docs_redoc_and_github():
+    response = client.get("/")
+
+    assert 'href="/docs"' in response.text
+    assert 'href="/redoc"' in response.text
+    assert (
+        'href="https://github.com/pbolla1311/customer360-platform"'
+        in response.text
+    )
+
+
+def test_root_landing_page_has_no_inline_script():
+    response = client.get("/")
+
+    assert INLINE_SCRIPT_PATTERN.findall(response.text) == []
+
+
+def test_root_landing_page_assets_resolve():
+    response = client.get("/")
+
+    script_srcs = re.findall(r'<script[^>]*\bsrc="([^"]+)"', response.text)
+    stylesheet_hrefs = re.findall(
+        r'<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"', response.text
+    )
+    image_srcs = re.findall(r'<img[^>]*\bsrc="([^"]+)"', response.text)
+
+    asset_urls = script_srcs + stylesheet_hrefs + image_srcs
+    assert asset_urls, "expected the landing page to reference local assets"
+
+    for url in asset_urls:
+        assert url.startswith("/static/"), url
+        asset_response = client.get(url)
+        assert asset_response.status_code == 200, url
+
+
+def test_status_returns_previous_root_json_response():
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "running"
+    assert body["application"] == "Customer360 Platform"
+    assert "version" in body
 
 
 def test_health():
@@ -215,7 +260,7 @@ def test_redoc_html_has_no_inline_script():
 
 
 def test_csp_is_strict_on_docs_and_redoc():
-    for path in ("/docs", "/redoc"):
+    for path in ("/", "/docs", "/redoc"):
         response = client.get(path)
         csp = response.headers["Content-Security-Policy"]
 

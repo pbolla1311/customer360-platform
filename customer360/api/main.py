@@ -39,7 +39,7 @@ from customer360.logging_config import configure_logging
 configure_logging()
 
 
-class RootResponse(BaseModel):
+class StatusResponse(BaseModel):
     application: str
     status: str
     version: str
@@ -122,6 +122,13 @@ app.add_exception_handler(
 STATIC_DIR = FilesystemPath(__file__).resolve().parent / "static"
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+LANDING_PAGE_HTML = (
+    (STATIC_DIR / "site" / "index.html")
+    .read_text()
+    .replace("{{APP_TITLE}}", API_TITLE)
+    .replace("{{APP_VERSION}}", API_VERSION)
+)
 
 
 SWAGGER_UI_HTML = f"""\
@@ -259,13 +266,18 @@ def serialize_profile(profile: Customer360Profile) -> dict[str, Any]:
     }
 
 
+@app.get("/", include_in_schema=False)
+def landing_page() -> HTMLResponse:
+    return HTMLResponse(LANDING_PAGE_HTML)
+
+
 @app.get(
-    "/",
-    response_model=RootResponse,
+    "/status",
+    response_model=StatusResponse,
     summary="Application status",
 )
-def root() -> RootResponse:
-    return RootResponse(
+def application_status() -> StatusResponse:
+    return StatusResponse(
         application="Customer360 Platform",
         status="running",
         version=API_VERSION,
