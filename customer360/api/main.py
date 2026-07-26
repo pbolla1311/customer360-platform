@@ -1,7 +1,15 @@
 from datetime import datetime
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Path,
+    Request,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -231,6 +239,10 @@ def get_customers(
             "model": ErrorResponse,
             "description": "Customer not found",
         },
+        status.HTTP_422_UNPROCESSABLE_ENTITY: {
+            "model": ErrorResponse,
+            "description": "Invalid customer ID",
+        },
         status.HTTP_429_TOO_MANY_REQUESTS: {
             "model": ErrorResponse,
             "description": "Rate limit exceeded",
@@ -247,6 +259,10 @@ def get_customers(
             "model": ErrorResponse,
             "description": "Customer not found",
         },
+        status.HTTP_422_UNPROCESSABLE_ENTITY: {
+            "model": ErrorResponse,
+            "description": "Invalid customer ID",
+        },
         status.HTTP_429_TOO_MANY_REQUESTS: {
             "model": ErrorResponse,
             "description": "Rate limit exceeded",
@@ -258,7 +274,12 @@ def get_customers(
 @limiter.limit("120/minute")
 def get_customer(
     request: Request,
-    customer_id: str,
+    customer_id: str = Path(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
     session: Session = Depends(get_db_session),
 ) -> dict[str, Any]:
     repository = Customer360Repository(session)
