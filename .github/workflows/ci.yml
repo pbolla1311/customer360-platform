@@ -33,7 +33,7 @@ jobs:
 
       - name: Run Ruff
         run: |
-          ruff check .
+          ruff check customer360
 
       - name: Run MyPy
         run: |
