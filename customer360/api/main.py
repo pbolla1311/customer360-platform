@@ -69,8 +69,10 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
+app.add_exception_handler(  # type: ignore[arg-type]
+    RateLimitExceeded,
+    _rate_limit_exceeded_handler,
+)
 v1 = APIRouter(prefix="/api/v1", tags=["v1"])
 
 
