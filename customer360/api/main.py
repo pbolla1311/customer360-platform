@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path as FilesystemPath
 from typing import Any, cast
 
 from fastapi import (
@@ -11,6 +12,9 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -81,8 +85,8 @@ app = FastAPI(
     title=API_TITLE,
     version=API_VERSION,
     description="Customer 360 profile and event-processing API.",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url=None,
+    redoc_url=None,
     openapi_url="/openapi.json",
 )
 
@@ -114,6 +118,33 @@ app.add_exception_handler(
     RateLimitExceeded,
     cast(Any, _rate_limit_exceeded_handler),
 )
+
+STATIC_DIR = FilesystemPath(__file__).resolve().parent / "static"
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/docs", include_in_schema=False)
+def swagger_ui_html() -> HTMLResponse:
+    return get_swagger_ui_html(
+        openapi_url=cast(str, app.openapi_url),
+        title=f"{app.title} - Swagger UI",
+        swagger_js_url="/static/swagger/swagger-ui-bundle.js",
+        swagger_css_url="/static/swagger/swagger-ui.css",
+        swagger_favicon_url="/static/swagger/favicon.png",
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+def redoc_html() -> HTMLResponse:
+    return get_redoc_html(
+        openapi_url=cast(str, app.openapi_url),
+        title=f"{app.title} - ReDoc",
+        redoc_js_url="/static/redoc/redoc.standalone.js",
+        redoc_favicon_url="/static/swagger/favicon.png",
+        with_google_fonts=False,
+    )
+
 
 v1 = APIRouter(prefix="/api/v1", tags=["v1"])
 

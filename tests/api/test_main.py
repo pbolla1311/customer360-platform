@@ -122,3 +122,37 @@ def test_cors_rejects_unconfigured_origin():
     )
 
     assert "Access-Control-Allow-Origin" not in response.headers
+
+
+def test_docs_returns_ok():
+    response = client.get("/docs")
+
+    assert response.status_code == 200
+
+
+def test_redoc_returns_ok():
+    response = client.get("/redoc")
+
+    assert response.status_code == 200
+
+
+def test_openapi_json_returns_ok():
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+
+
+def test_docs_uses_locally_hosted_assets():
+    response = client.get("/docs")
+
+    assert "/static/swagger/swagger-ui-bundle.js" in response.text
+    assert "/static/swagger/swagger-ui.css" in response.text
+    assert "cdn.jsdelivr.net" not in response.text
+
+
+def test_redoc_uses_locally_hosted_assets():
+    response = client.get("/redoc")
+
+    assert "/static/redoc/redoc.standalone.js" in response.text
+    assert "cdn.jsdelivr.net" not in response.text
+    assert "fonts.googleapis.com" not in response.text

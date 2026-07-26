@@ -52,3 +52,6 @@ exclude = [
     "apps*",
     "airflow*",
 ]
+
+[tool.setuptools.package-data]
+customer360 = ["api/static/swagger/*", "api/static/redoc/*"]
