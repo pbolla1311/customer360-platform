@@ -1,6 +1,7 @@
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
 
 from customer360.config import API_TITLE, API_VERSION
 from customer360.infrastructure.models import Customer360Profile
@@ -42,13 +43,28 @@ def root() -> dict[str, str]:
 
 @app.get("/health")
 @v1.get("/health")
-def health(
-    session: Session = Depends(get_db_session),
-) -> dict[str, str]:
-    session.execute(text("SELECT 1"))
-
+def health() -> dict[str, str]:
     return {
         "status": "healthy",
+        "version": API_VERSION,
+    }
+
+
+@app.get("/ready")
+@v1.get("/ready")
+def readiness(
+    session: Session = Depends(get_db_session),
+) -> dict[str, str]:
+    try:
+        session.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database is unavailable",
+        ) from exc
+
+    return {
+        "status": "ready",
         "database": "connected",
         "version": API_VERSION,
     }
