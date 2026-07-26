@@ -8,12 +8,12 @@ from fastapi import (
     FastAPI,
     HTTPException,
     Path,
+    Query,
     Request,
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -124,26 +124,120 @@ STATIC_DIR = FilesystemPath(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+SWAGGER_UI_HTML = f"""\
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link type="text/css" rel="stylesheet" href="/static/swagger/swagger-ui.css">
+<link rel="shortcut icon" href="/static/swagger/favicon.png">
+<title>{API_TITLE} - Swagger UI</title>
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="/static/swagger/swagger-ui-bundle.js"></script>
+<script src="/static/swagger/swagger-initializer.js"></script>
+</body>
+</html>
+"""
+
+CSP_NONCE_PATTERN = r"^[A-Za-z0-9_-]+$"
+
+
+def _redoc_html(nonce: str) -> str:
+    return f"""\
+<!DOCTYPE html>
+<html>
+<head>
+<title>{API_TITLE} - ReDoc</title>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="shortcut icon" href="/static/swagger/favicon.png">
+<link rel="stylesheet" href="/static/redoc/redoc.css">
+</head>
+<body>
+<div id="redoc-container"></div>
+<script src="/redoc/pre-init.js?nonce={nonce}"></script>
+<script src="/static/redoc/redoc.standalone.js"></script>
+<script src="/redoc/init.js?nonce={nonce}"></script>
+</body>
+</html>
+"""
+
+
+def _style_nonce_patch_js(nonce: str) -> str:
+    # ReDoc (via styled-components) and its perfect-scrollbar dependency
+    # both create <style> elements at runtime with document.createElement,
+    # some as soon as redoc.standalone.js is first parsed. Chrome only
+    # honors a nonce set through an element's `.nonce` IDL property for
+    # such dynamically-created elements -- it deliberately ignores
+    # setAttribute('nonce', ...), which is what those bundles use
+    # internally. Patching createElement here, before redoc.standalone.js
+    # even loads, stamps the correct property on every <style> tag the
+    # instant it's made, so our nonce-based style-src is honored without
+    # 'unsafe-inline'.
+    return (
+        "(function () {\n"
+        f"  var nonce = {nonce!r};\n"
+        "  var nativeCreateElement = document.createElement.bind(document);\n"
+        "  document.createElement = function (tagName) {\n"
+        "    var element = nativeCreateElement.apply(\n"
+        "      document, arguments,\n"
+        "    );\n"
+        "    if (\n"
+        "      typeof tagName === 'string' &&\n"
+        "      tagName.toLowerCase() === 'style'\n"
+        "    ) {\n"
+        "      element.nonce = nonce;\n"
+        "    }\n"
+        "    return element;\n"
+        "  };\n"
+        "})();\n"
+    )
+
+
 @app.get("/docs", include_in_schema=False)
 def swagger_ui_html() -> HTMLResponse:
-    return get_swagger_ui_html(
-        openapi_url=cast(str, app.openapi_url),
-        title=f"{app.title} - Swagger UI",
-        swagger_js_url="/static/swagger/swagger-ui-bundle.js",
-        swagger_css_url="/static/swagger/swagger-ui.css",
-        swagger_favicon_url="/static/swagger/favicon.png",
-    )
+    return HTMLResponse(SWAGGER_UI_HTML)
 
 
 @app.get("/redoc", include_in_schema=False)
-def redoc_html() -> HTMLResponse:
-    return get_redoc_html(
-        openapi_url=cast(str, app.openapi_url),
-        title=f"{app.title} - ReDoc",
-        redoc_js_url="/static/redoc/redoc.standalone.js",
-        redoc_favicon_url="/static/swagger/favicon.png",
-        with_google_fonts=False,
+def redoc_html(request: Request) -> HTMLResponse:
+    nonce = cast(str, request.state.csp_nonce)
+    return HTMLResponse(_redoc_html(nonce))
+
+
+@app.get("/redoc/pre-init.js", include_in_schema=False)
+def redoc_pre_init_js(
+    nonce: str = Query(..., pattern=CSP_NONCE_PATTERN),
+) -> Response:
+    return Response(
+        content=_style_nonce_patch_js(nonce),
+        media_type="application/javascript",
     )
+
+
+@app.get("/redoc/init.js", include_in_schema=False)
+def redoc_init_js(
+    nonce: str = Query(..., pattern=CSP_NONCE_PATTERN),
+) -> Response:
+    # This script is loaded as an external file (matched by script-src
+    # 'self') so the Redoc.init bootstrap call never needs to be an
+    # inline <script>. Passing `nonce` through Redoc.init's own options
+    # covers the <style> tags it creates after this point (belt-and-
+    # braces alongside the createElement patch in pre-init.js).
+    #
+    # hideFab/disableSearch turn off ReDoc's branding badge (which pulls
+    # an image from cdn.redoc.ly) and its worker-based search index
+    # (loaded from a blob: URL) rather than loosening the CSP with
+    # img-src/worker-src exceptions for them.
+    body = (
+        f"Redoc.init({app.openapi_url!r}, "
+        f"{{nonce: {nonce!r}, hideFab: true, disableSearch: true}}, "
+        'document.getElementById("redoc-container"));'
+    )
+    return Response(content=body, media_type="application/javascript")
 
 
 v1 = APIRouter(prefix="/api/v1", tags=["v1"])

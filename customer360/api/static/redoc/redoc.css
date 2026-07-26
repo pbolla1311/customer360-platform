@@ -1,0 +1,11 @@
+body {
+  margin: 0;
+  padding: 0;
+}
+
+/* Redocly's own branding footer link fetches an icon from cdn.redoc.ly
+   and a data: URI fallback, both blocked by our img-src. It already
+   self-hides on load failure; this just avoids any flash beforehand. */
+a[href="https://redocly.com/redoc/"] {
+  display: none;
+}
