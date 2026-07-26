@@ -1,21 +1,25 @@
+<div align="center">
+
 # Customer360 Platform
 
 **A production-style customer data platform demonstrating backend architecture, event-driven data engineering, and secure API design — built solo and deployed end to end.**
 
 [![CI](https://github.com/pbolla1311/customer360-platform/actions/workflows/tests.yml/badge.svg)](https://github.com/pbolla1311/customer360-platform/actions/workflows/tests.yml)
-![Python](https://img.shields.io/badge/python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)
-![Type Checking](https://img.shields.io/badge/mypy-strict-2A6DB2?style=flat-square)
-![Lint](https://img.shields.io/badge/lint-ruff-D7FF64?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-68%20passing-brightgreen?style=flat-square)
+[![Python](https://img.shields.io/badge/python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![Type Checking](https://img.shields.io/badge/mypy-strict-2A6DB2?style=flat-square)](https://mypy-lang.org/)
+[![Lint](https://img.shields.io/badge/lint-ruff-D7FF64?style=flat-square)](https://docs.astral.sh/ruff/)
+[![Tests](https://img.shields.io/badge/tests-68%20passing-brightgreen?style=flat-square)](https://github.com/pbolla1311/customer360-platform/tree/main/tests)
 
-![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white)
-![Kafka](https://img.shields.io/badge/Kafka-231F20?style=flat-square&logo=apachekafka&logoColor=white)
-![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-CC2927?style=flat-square)
-![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
-![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white)
-![Terraform](https://img.shields.io/badge/Terraform-7B42BC?style=flat-square&logo=terraform&logoColor=white)
-![Railway](https://img.shields.io/badge/Railway-0B0D0E?style=flat-square&logo=railway&logoColor=white)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Kafka](https://img.shields.io/badge/Kafka-231F20?style=flat-square&logo=apachekafka&logoColor=white)](https://kafka.apache.org/)
+[![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-CC2927?style=flat-square)](https://www.sqlalchemy.org/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white)](https://kubernetes.io/)
+[![Terraform](https://img.shields.io/badge/Terraform-7B42BC?style=flat-square&logo=terraform&logoColor=white)](https://www.terraform.io/)
+[![Railway](https://img.shields.io/badge/Railway-0B0D0E?style=flat-square&logo=railway&logoColor=white)](https://railway.app/)
+
+</div>
 
 ---
 
@@ -31,6 +35,41 @@ The API is deployed and publicly reachable on Railway.
 | OpenAPI schema | <https://customer360-platform-production.up.railway.app/openapi.json> |
 
 > The `/customers` endpoints require an `X-API-Key` header, verified server-side against the `API_KEY` environment variable. That variable isn't currently set on the live Railway deployment, so `/customers` there returns `503 API security is not configured` rather than serving data — the endpoint fails closed instead of silently allowing access. It works end-to-end locally and in CI, where `API_KEY` is set. Everything else — root, health, readiness, docs, and the OpenAPI schema — is open on the live demo.
+
+---
+
+## Screenshots
+
+<div align="center">
+
+<img src="docs/images/social-preview.png" alt="Customer360 Platform — enterprise backend and data engineering" width="820"/>
+
+<br/><br/>
+
+<img src="docs/images/architecture.png" alt="System architecture diagram: FastAPI service, PostgreSQL, batch pipeline, and Kafka" width="820"/>
+<br/><sub><b>System architecture</b> — see the interactive version in <a href="#architecture-diagram">Architecture Diagram</a></sub>
+
+<br/><br/>
+
+<img src="docs/images/swagger-ui.png" alt="Self-hosted Swagger UI showing the Customer360 Platform endpoint list" width="820"/>
+<br/><sub><b>Swagger UI</b> — self-hosted at <code>/docs</code>, no external CDN, strict CSP</sub>
+
+<br/><br/>
+
+<img src="docs/images/redoc.png" alt="Self-hosted ReDoc documentation view" width="820"/>
+<br/><sub><b>ReDoc</b> — self-hosted at <code>/redoc</code></sub>
+
+<br/><br/>
+
+<img src="docs/images/request-flow.png" alt="Request lifecycle sequence diagram" width="820"/>
+<br/><sub><b>Request lifecycle</b> — see the interactive version in <a href="#request-and-event-flow">Request and Event Flow</a></sub>
+
+<br/><br/>
+
+<img src="docs/images/event-flow.png" alt="Kafka event processing flow sequence diagram" width="820"/>
+<br/><sub><b>Event processing flow</b> — batch ingestion, Kafka publish, dead-letter fallback, idempotent consumption</sub>
+
+</div>
 
 ---
 
@@ -104,9 +143,20 @@ This repository exists to demonstrate how I approach backend and platform engine
 The system is organized into four layers:
 
 1. **API layer** (`customer360/api/`) — the FastAPI app, middleware stack (CORS, security headers, audit logging), rate limiting, API-key auth, and the self-hosted docs routes.
+
+   *Why it matters:* every cross-cutting concern (who can call this, how fast, what gets logged) lives in one composable middleware stack instead of being scattered across route handlers — new endpoints inherit security and observability for free.
+
 2. **Infrastructure layer** (`customer360/infrastructure/`) — the SQLAlchemy model, session/engine setup, and the repository that mediates all database access.
+
+   *Why it matters:* route handlers never see a SQL session directly. Query logic, error handling, and logging are centralized in one testable place, so a schema or database change touches one layer, not every endpoint.
+
 3. **Data & messaging layer** (`customer360/ingestion/`, `customer360/spark/`, `customer360/messaging/`, `customer360/outbox/`) — the batch cleaning pipeline, the Customer 360 merge step, the Kafka producer/consumer, and the outbox pattern implementation.
+
+   *Why it matters:* ingestion, transformation, and event publishing are independent, individually testable components rather than one monolithic script — each has its own failure mode (bad input, a down broker) handled where it happens.
+
 4. **Delivery layer** — Docker for containerization, Kubernetes manifests for orchestration, Terraform for AWS infrastructure, and GitHub Actions for CI. Railway builds and runs the container for the public demo.
+
+   *Why it matters:* the same container image is the unit of deployment everywhere — locally, in CI, and on Railway — so "it works on my machine" isn't a category of bug this project has.
 
 > Note: the `customer360/spark/` module is a pandas-based transformation pipeline, not Apache Spark/PySpark — the directory name reflects its role in the data pipeline (the "bronze → gold" merge step), not the underlying engine.
 
@@ -175,7 +225,7 @@ sequenceDiagram
     participant DB as PostgreSQL
 
     C->>MW: GET /api/v1/customers (X-API-Key)
-    MW->>MW: CORS check, security headers,\nrate limit, API key verification
+    MW->>MW: CORS check, security headers, rate limit, API key verification
     MW->>R: forward request
     R->>Repo: list_all()
     Repo->>DB: SELECT ... ORDER BY total_spend DESC
@@ -238,7 +288,7 @@ sequenceDiagram
 All customer-data endpoints are exposed twice: once unversioned (for the live docs/demo) and once under `/api/v1`, so the same handler is reachable at both paths.
 
 | Method | Path | Auth | Rate limit | Description |
-| --- | --- | --- | --- | --- |
+| :---: | --- | :---: | :---: | --- |
 | `GET` | `/` | none | — | Application status |
 | `GET` | `/health`, `/api/v1/health` | none | — | Liveness check |
 | `GET` | `/ready`, `/api/v1/ready` | none | — | Readiness check (verifies DB connectivity) |
