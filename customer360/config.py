@@ -19,4 +19,13 @@ DATABASE_URL = os.getenv(
 )
 
 API_TITLE = "Customer360 Platform"
-API_VERSION = "1.0.0"
+API_VERSION = "1.0"
+
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:8501",
+    ).split(",")
+    if origin.strip()
+]
