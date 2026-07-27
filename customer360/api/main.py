@@ -78,6 +78,12 @@ class CustomerProfileResponse(BaseModel):
     updated_at: datetime
 
 
+class DemoSummaryResponse(BaseModel):
+    total_customers: int
+    active_profiles: int
+    total_transactions: int
+
+
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=[],
@@ -147,6 +153,14 @@ LANDING_PAGE_HTML = (
     .replace("{{APP_VERSION}}", API_VERSION)
     .replace("{{LINKEDIN_LINK_AUTHOR}}", _linkedin_link_html("author-link"))
     .replace("{{LINKEDIN_LINK_FOOTER}}", _linkedin_link_html("footer-link"))
+)
+
+
+DEMO_PAGE_HTML = (
+    (STATIC_DIR / "demo" / "index.html")
+    .read_text()
+    .replace("{{APP_TITLE}}", API_TITLE)
+    .replace("{{APP_VERSION}}", API_VERSION)
 )
 
 
@@ -436,6 +450,90 @@ def get_customers(
 )
 @limiter.limit("120/minute")
 def get_customer(
+    request: Request,
+    customer_id: str = Path(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
+    repository = Customer360Repository(session)
+    profile = repository.get_by_customer_id(customer_id)
+
+    if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Customer not found",
+        )
+
+    return serialize_profile(profile)
+
+
+@app.get("/demo", include_in_schema=False)
+def demo_dashboard() -> HTMLResponse:
+    return HTMLResponse(DEMO_PAGE_HTML)
+
+
+# The routes below back the /demo dashboard only. They deliberately do not
+# require verify_api_key: they only ever serve seeded, fictional demo rows
+# (see scripts/seed_demo_customers.py), and the real X-API-Key secret must
+# never reach browser-side JS. The authenticated /customers and
+# /api/v1/customers routes above are unchanged. Kept out of the OpenAPI
+# schema for the same reason the HTML routes above are (docs/redoc/landing).
+@app.get(
+    "/demo/api/summary",
+    response_model=DemoSummaryResponse,
+    include_in_schema=False,
+)
+@limiter.limit("60/minute")
+def demo_summary(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> DemoSummaryResponse:
+    repository = Customer360Repository(session)
+    profiles = repository.list_all()
+
+    return DemoSummaryResponse(
+        total_customers=len(profiles),
+        active_profiles=sum(
+            1 for profile in profiles if profile.transaction_count > 0
+        ),
+        total_transactions=sum(
+            profile.transaction_count for profile in profiles
+        ),
+    )
+
+
+@app.get(
+    "/demo/api/customers",
+    response_model=list[CustomerProfileResponse],
+    include_in_schema=False,
+)
+@limiter.limit("60/minute")
+def demo_customers(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> list[dict[str, Any]]:
+    repository = Customer360Repository(session)
+    profiles = repository.list_all()
+    return [serialize_profile(profile) for profile in profiles]
+
+
+@app.get(
+    "/demo/api/customers/{customer_id}",
+    response_model=CustomerProfileResponse,
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": "Customer not found",
+        },
+    },
+    include_in_schema=False,
+)
+@limiter.limit("120/minute")
+def demo_customer(
     request: Request,
     customer_id: str = Path(
         ...,

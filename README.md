@@ -38,6 +38,56 @@ The API is deployed and publicly reachable on Railway.
 
 ---
 
+## Demo Dashboard
+
+_New in v1.1._ **[`/demo`](https://customer360-platform-production.up.railway.app/demo)** is an interactive, recruiter-facing dashboard on top of the same FastAPI backend and PostgreSQL database as the rest of the platform — search customer profiles, select one, and view its fields, without needing an API key or reading raw JSON.
+
+**Why it doesn't call `/api/v1/customers` directly:** that endpoint requires the `X-API-Key` secret (see the note above), and browser-side JavaScript can never hold that secret safely. So `/demo` is backed by its own read-only, unauthenticated routes — `GET /demo/api/summary`, `GET /demo/api/customers`, `GET /demo/api/customers/{customer_id}` — implemented in `customer360/api/main.py` right alongside the versioned routes, reusing the exact same `Customer360Repository` and serialization logic. They are excluded from the OpenAPI schema (like `/docs`/`/redoc`/`/`) since they exist only to support this page, not as a documented product API. **The real `/customers` and `/api/v1/customers*` endpoints are completely unchanged** — still key-gated, still rate-limited, still versioned.
+
+**What's real data vs. illustrative demo data:**
+
+| On the dashboard | Source |
+| --- | --- |
+| Total Customers, Total Transactions | Real — `COUNT(*)` / `SUM(transaction_count)` over `customer360_profiles` |
+| Active Profiles | Real, but derived — profiles with `transaction_count > 0` (there's no `status` column in the schema) |
+| Events Processed | **Sample metric** — the API has no live Kafka event count, so this is a labeled, deterministic function of the real transaction/customer counts, computed in the browser |
+| Profile fields (ID, name, email, city, state, transaction count, spend, timestamps) | Real — whatever `customer360_profiles` actually has for that row |
+| Activity Timeline | **Illustrative demo data** — generated entirely client-side in `demo.js` from the selected customer's ID (deterministic, not random, so it's stable across reloads); never a live transactions/events feed |
+
+Every illustrative value on the page carries a visible "Sample metric" or "Illustrative demo data" tag, and the dashboard header shows a standing notice: _"Customer records are served from the live Customer360 API. Activity and selected summary metrics may use illustrative demo data where the backend does not yet expose those datasets."_
+
+### Seeding fictional demo customers
+
+The API is read-only over HTTP, so there's no write endpoint to populate `/demo` with data — instead, a script upserts a small fictional dataset directly through the repository layer:
+
+```bash
+ENABLE_DEMO_SEED=true python scripts/seed_demo_customers.py
+# or:
+python scripts/seed_demo_customers.py --force
+```
+
+- **Idempotent** — re-running it upserts the same 10 `customer_id`s (`DEMO-0001`..`DEMO-0010`) instead of creating duplicates.
+- **Disabled by default** — it refuses to run unless `ENABLE_DEMO_SEED=true` or `--force` is passed explicitly; it is never invoked automatically by the app, a startup hook, or CI.
+- **Fictional data only** — reserved example domains (`@example.com` / `@example.org`), invented names, no real personal information.
+- If the database has no rows yet, `/demo` shows a professional empty state explaining that no demo records are loaded and linking to this command and to Swagger UI — it does not silently invent customers.
+
+### Demo Dashboard Screenshot Checklist
+
+<!-- Capture after seeding demo data (see above), then embed alongside the images in the Screenshots section below:
+  - [ ] docs/images/demo-dashboard-desktop.png  — /demo at desktop width with a customer selected
+  - [ ] docs/images/demo-dashboard-mobile.png   — /demo at a mobile viewport, no horizontal scroll
+  - [ ] docs/images/demo-dashboard-empty.png    — /demo empty state (unseeded database)
+-->
+
+### v1.1 scope and limitations
+
+- The dashboard is read-focused: search, select, view. There is no editing, and no write path was added anywhere in the API.
+- "Active Profiles" and "Events Processed" are derived/illustrative as documented above — they are not new database columns or a new metrics pipeline.
+- The Activity Timeline is frontend-only and does not reflect the Kafka event pipeline described elsewhere in this README; wiring a real per-customer event feed into `/demo` is future work (see [Roadmap](#roadmap)).
+- `/demo/api/*` intentionally has no `X-API-Key` requirement — see "Why it doesn't call `/api/v1/customers` directly" above for the reasoning and its blast radius (read-only, seeded/fictional data only).
+
+---
+
 ## Screenshots
 
 <div align="center">
@@ -297,6 +347,12 @@ All customer-data endpoints are exposed twice: once unversioned (for the live do
 | `GET` | `/docs` | none | — | Self-hosted Swagger UI |
 | `GET` | `/redoc` | none | — | Self-hosted ReDoc |
 | `GET` | `/openapi.json` | none | — | OpenAPI 3.1 schema |
+| `GET` | `/demo` | none | — | Demo dashboard HTML page (see [Demo Dashboard](#demo-dashboard)) |
+| `GET` | `/demo/api/summary` | none | 60/min | Demo-only summary counts |
+| `GET` | `/demo/api/customers` | none | 60/min | Demo-only customer list (same data/serialization as `/customers`, no key required) |
+| `GET` | `/demo/api/customers/{customer_id}` | none | 120/min | Demo-only single customer |
+
+The `/demo/api/*` routes are excluded from the OpenAPI schema — they exist to support the `/demo` page, not as part of the documented, versioned product API.
 
 The API is currently **read-only** over HTTP — profile creation/updates happen through the batch ingestion pipeline, not through write endpoints (see [Limitations](#limitations)).
 
@@ -536,7 +592,7 @@ Being direct about the current gaps:
 - **Idempotent de-duplication is in-process only.** The consumer's processed-event tracking is an in-memory set; it resets on restart and isn't shared across consumer instances.
 - **Prometheus metrics aren't exposed.** The `Counter`/`Histogram` objects exist but aren't incremented by request handling, and there is no `/metrics` endpoint.
 - **The `spark/` module uses pandas, not Apache Spark.** No PySpark dependency is installed; the module name reflects its role in a Bronze→Gold pipeline, not the execution engine.
-- **`dbt/models/` and `airflow/dags/` are empty placeholders**, as are the top-level `ingestion/`, `scripts/`, `quality/`, `infrastructure/`, `diagrams/`, and `demo/` directories.
+- **`dbt/models/` and `airflow/dags/` are empty placeholders**, as are the top-level `ingestion/`, `quality/`, `infrastructure/`, `diagrams/`, and `demo/` directories. (The top-level `scripts/` directory now holds `seed_demo_customers.py` — see [Demo Dashboard](#demo-dashboard) — but is otherwise still a placeholder for future operational scripts.)
 - **No Streamlit dashboard exists**, despite `streamlit` being listed as a dependency and `apps/dashboard/` existing as an empty directory.
 - **AWS deployment is not live.** Terraform is validated in CI and Kubernetes manifests are included, but the workflow that would publish a container to AWS is disabled; Railway is the only environment actually running the app.
 - **Single static API key**, not per-client keys, OAuth, or user accounts.

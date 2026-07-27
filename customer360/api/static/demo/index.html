@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>{{APP_TITLE}} — Demo Dashboard</title>
+<meta name="description" content="An interactive Customer360 demo dashboard: real customer profiles from the live API, searchable and browsable."/>
+<link rel="shortcut icon" href="/static/swagger/favicon.png"/>
+<link rel="stylesheet" href="/static/demo/demo.css"/>
+</head>
+<body>
+<div class="grid-overlay"></div>
+
+<div class="wrap">
+
+  <header class="demo-header">
+    <a class="brand" href="/">
+      <span class="brand-mark">C</span>
+      <span class="brand-name">{{APP_TITLE}}</span>
+    </a>
+    <span class="demo-badge">Demo Dashboard</span>
+    <nav class="demo-header-nav" aria-label="Demo dashboard navigation">
+      <a href="/">Landing Page</a>
+      <a href="/docs">Swagger UI</a>
+      <a href="/api/v1/customers" target="_blank" rel="noopener noreferrer">Versioned Customer API</a>
+      <a href="https://github.com/pbolla1311/customer360-platform" target="_blank" rel="noopener noreferrer">GitHub</a>
+    </nav>
+  </header>
+
+  <p class="demo-notice">
+    Customer records are served from the live Customer360 API. Activity and selected summary metrics may use illustrative demo data where the backend does not yet expose those datasets.
+  </p>
+
+  <main>
+    <section class="summary-grid" aria-label="Summary metrics">
+      <div class="summary-card">
+        <span class="summary-label">Total Customers</span>
+        <span class="summary-value" id="summary-total-customers">—</span>
+        <span class="summary-tag summary-tag--live">Live data</span>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">Active Profiles</span>
+        <span class="summary-value" id="summary-active-profiles">—</span>
+        <span class="summary-tag summary-tag--derived">Derived: transactions &gt; 0</span>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">Total Transactions</span>
+        <span class="summary-value" id="summary-total-transactions">—</span>
+        <span class="summary-tag summary-tag--live">Live data</span>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">Events Processed</span>
+        <span class="summary-value" id="summary-events-processed">—</span>
+        <span class="summary-tag summary-tag--sample">Sample metric</span>
+      </div>
+    </section>
+
+    <section class="customer-area" aria-label="Customer explorer">
+      <div class="customer-panel customer-panel--list">
+        <div class="search-row">
+          <label class="sr-only" for="customer-search">Search customers by name, email, or customer ID</label>
+          <input
+            id="customer-search"
+            type="search"
+            placeholder="Search by name, email, or customer ID"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button id="search-clear" type="button" aria-label="Clear search">Clear</button>
+        </div>
+
+        <p class="list-hint" id="list-hint">Loading customer profiles…</p>
+
+        <ul
+          class="customer-list"
+          id="customer-list"
+          role="listbox"
+          aria-label="Customer results"
+          tabindex="0"
+        ></ul>
+
+        <div class="state-panel is-hidden" id="state-loading" role="status">
+          <div class="spinner" aria-hidden="true"></div>
+          <p>Loading customer profiles from the live API…</p>
+        </div>
+
+        <div class="state-panel is-hidden" id="state-empty" role="status">
+          <p class="state-title">No demo customer records are currently loaded</p>
+          <p>
+            The Customer360 API is live and reachable, but the database has no
+            customer rows yet. Seed fictional demo records with
+            <code>python scripts/seed_demo_customers.py</code>
+            (requires <code>ENABLE_DEMO_SEED=true</code>), or inspect the raw
+            endpoint yourself in
+            <a href="/docs">Swagger UI</a>.
+          </p>
+        </div>
+
+        <div class="state-panel is-hidden" id="state-error" role="alert">
+          <p class="state-title">Couldn't reach the Customer360 API</p>
+          <p id="state-error-detail">
+            The request to the live backend failed. This can happen if the
+            service is redeploying or temporarily unavailable.
+          </p>
+          <button id="retry-button" type="button" class="btn btn-secondary">Retry</button>
+        </div>
+      </div>
+
+      <div class="customer-panel customer-panel--profile">
+        <div id="profile-empty" class="profile-placeholder">
+          <p>Select a customer from the list to view their profile.</p>
+        </div>
+
+        <article id="profile-content" class="profile-content is-hidden" aria-live="polite">
+          <header class="profile-header">
+            <h2 id="profile-name"></h2>
+            <span class="profile-status" id="profile-status"></span>
+          </header>
+
+          <dl class="profile-fields" id="profile-fields"></dl>
+
+          <div class="activity-panel">
+            <div class="activity-heading">
+              <h3>Activity Timeline</h3>
+              <span class="summary-tag summary-tag--sample">Illustrative demo data</span>
+            </div>
+            <p class="activity-caption">
+              Generated in the browser from this customer's ID — not live
+              transaction or event data.
+            </p>
+            <ol class="activity-list" id="activity-list"></ol>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="demo-footer">
+    <a href="/">&larr; Back to landing page</a>
+    <span class="demo-footer-meta">{{APP_TITLE}} · Demo Dashboard · v{{APP_VERSION}}</span>
+  </footer>
+
+</div>
+
+<script src="/static/demo/demo.js"></script>
+</body>
+</html>

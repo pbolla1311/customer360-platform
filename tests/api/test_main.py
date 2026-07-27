@@ -2,6 +2,8 @@ import os
 import re
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 os.environ["API_KEY"] = "test-api-key"
 # Forces the landing page's LinkedIn link into its unconfigured, placeholder
@@ -10,6 +12,7 @@ os.environ["API_KEY"] = "test-api-key"
 os.environ["AUTHOR_LINKEDIN_URL"] = ""
 
 from customer360.api.main import app
+from customer360.infrastructure.session import Base, get_db_session
 
 client = TestClient(app)
 
@@ -80,12 +83,19 @@ def test_root_landing_page_has_github_stats_container():
         assert f'id="{stat_id}"' in response.text
 
 
-def test_root_landing_page_has_five_live_deployment_links():
+def test_root_landing_page_has_six_live_deployment_links():
     response = client.get("/")
 
-    assert response.text.count('class="demo-card"') == 5
-    for href in ("/", "/docs", "/redoc", "/openapi.json", "/health"):
+    assert response.text.count('class="demo-card"') == 6
+    for href in ("/demo", "/", "/docs", "/redoc", "/openapi.json", "/health"):
         assert f'href="{href}"' in response.text, href
+
+
+def test_root_landing_page_has_launch_demo_button():
+    response = client.get("/")
+
+    assert 'href="/demo"' in response.text
+    assert "Launch Demo" in response.text
 
 
 def test_root_landing_page_new_tab_links_use_noopener_noreferrer():
@@ -172,6 +182,7 @@ def test_root_landing_page_footer_has_required_content_and_links():
     footer_html = footer_match.group(0)
 
     assert 'href="https://github.com/pbolla1311/customer360-platform"' in footer_html
+    assert 'href="/demo"' in footer_html
     assert 'href="/docs"' in footer_html
     assert 'href="/redoc"' in footer_html
     assert 'href="/health"' in footer_html
@@ -390,7 +401,7 @@ def test_redoc_html_has_no_inline_script():
 
 
 def test_csp_is_strict_on_docs_and_redoc():
-    for path in ("/", "/docs", "/redoc"):
+    for path in ("/", "/docs", "/redoc", "/demo"):
         response = client.get(path)
         csp = response.headers["Content-Security-Policy"]
 
@@ -452,3 +463,184 @@ def test_redoc_init_js_bootstraps_redoc_without_unsafe_inline():
     assert "Redoc.init(" in response.text
     assert "nonce" in response.text
     assert "abc123" in response.text
+
+
+# ---------------------------------------------------------------------
+# Existing v1 API behavior, locked in before adding /demo below.
+# ---------------------------------------------------------------------
+
+
+def test_v1_customers_requires_api_key():
+    response = client.get("/api/v1/customers")
+
+    assert response.status_code == 401
+
+
+def test_v1_get_customers_with_valid_key():
+    response = client.get("/api/v1/customers", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_v1_health_matches_unversioned_health():
+    assert client.get("/api/v1/health").json() == client.get("/health").json()
+
+
+# ---------------------------------------------------------------------
+# /demo dashboard
+# ---------------------------------------------------------------------
+
+
+def _empty_sqlite_session():
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    testing_session_factory = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        autocommit=False,
+        expire_on_commit=False,
+    )
+    session = testing_session_factory()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def _broken_db_session():
+    raise RuntimeError("simulated database outage")
+    yield  # pragma: no cover -- generator must contain a yield to be a dependency
+
+
+def test_demo_page_returns_ok():
+    response = client.get("/demo")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+
+
+def test_demo_page_has_dashboard_title():
+    response = client.get("/demo")
+
+    assert "Demo Dashboard" in response.text
+
+
+def test_demo_page_links_to_versioned_customer_api():
+    response = client.get("/demo")
+
+    assert 'href="/api/v1/customers"' in response.text
+
+
+def test_demo_page_links_to_swagger_and_github_and_landing():
+    response = client.get("/demo")
+
+    assert 'href="/docs"' in response.text
+    assert 'href="/"' in response.text
+    assert (
+        'href="https://github.com/pbolla1311/customer360-platform"'
+        in response.text
+    )
+
+
+def test_demo_page_has_no_inline_script():
+    response = client.get("/demo")
+
+    assert INLINE_SCRIPT_PATTERN.findall(response.text) == []
+
+
+def test_demo_page_has_no_inline_style():
+    response = client.get("/demo")
+
+    assert INLINE_STYLE_PATTERN.findall(response.text) == []
+
+
+def test_demo_page_assets_resolve():
+    response = client.get("/demo")
+
+    script_srcs = re.findall(r'<script[^>]*\bsrc="([^"]+)"', response.text)
+    stylesheet_hrefs = re.findall(
+        r'<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"', response.text
+    )
+
+    asset_urls = script_srcs + stylesheet_hrefs
+    assert "/static/demo/demo.js" in script_srcs
+    assert "/static/demo/demo.css" in stylesheet_hrefs
+
+    for url in asset_urls:
+        assert url.startswith("/static/"), url
+        asset_response = client.get(url)
+        assert asset_response.status_code == 200, url
+
+
+def test_demo_page_shows_accuracy_notice():
+    response = client.get("/demo")
+
+    assert "illustrative demo data" in response.text.lower()
+
+
+def test_demo_customers_endpoint_does_not_require_api_key():
+    response = client.get("/demo/api/customers")
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_demo_summary_endpoint_does_not_require_api_key():
+    response = client.get("/demo/api/summary")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"total_customers", "active_profiles", "total_transactions"}
+
+
+def test_demo_customer_detail_not_found_returns_404():
+    response = client.get("/demo/api/customers/does-not-exist")
+
+    assert response.status_code == 404
+
+
+def test_demo_customer_detail_rejects_invalid_characters():
+    response = client.get("/demo/api/customers/customer%20id")
+
+    assert response.status_code == 422
+
+
+def test_demo_customers_empty_database_renders_empty_list():
+    app.dependency_overrides[get_db_session] = _empty_sqlite_session
+    try:
+        customers_response = client.get("/demo/api/customers")
+        summary_response = client.get("/demo/api/summary")
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert customers_response.status_code == 200
+    assert customers_response.json() == []
+
+    assert summary_response.status_code == 200
+    assert summary_response.json() == {
+        "total_customers": 0,
+        "active_profiles": 0,
+        "total_transactions": 0,
+    }
+
+
+def test_demo_customers_backend_failure_surfaces_as_error_status():
+    app.dependency_overrides[get_db_session] = _broken_db_session
+    error_client = TestClient(app, raise_server_exceptions=False)
+    try:
+        response = error_client.get("/demo/api/customers")
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert response.status_code >= 500
+
+
+def test_demo_endpoints_are_excluded_from_openapi_schema():
+    schema = client.get("/openapi.json").json()
+
+    assert "/demo" not in schema["paths"]
+    assert "/demo/api/customers" not in schema["paths"]

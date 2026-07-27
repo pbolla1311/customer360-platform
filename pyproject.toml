@@ -54,4 +54,9 @@ exclude = [
 ]
 
 [tool.setuptools.package-data]
-customer360 = ["api/static/swagger/*", "api/static/redoc/*", "api/static/site/*"]
+customer360 = [
+    "api/static/swagger/*",
+    "api/static/redoc/*",
+    "api/static/site/*",
+    "api/static/demo/*",
+]
