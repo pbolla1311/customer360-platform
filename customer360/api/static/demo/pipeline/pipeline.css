@@ -234,6 +234,85 @@ select:focus-visible,
   border: 1px solid rgba(251, 191, 36, 0.35);
 }
 
+/* ---------- Control Center ---------- */
+
+.control-center-panel {
+  margin-bottom: 24px;
+}
+
+.control-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.control-group {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.control-group select {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 0 10px;
+}
+
+.control-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+}
+
+.control-btn:hover:not(:disabled) {
+  border-color: var(--accent-cyan);
+  transform: translateY(-1px);
+}
+
+.control-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.control-btn--primary {
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+  color: var(--bg-0);
+  border-color: transparent;
+}
+
+.control-btn--danger {
+  border-color: rgba(248, 113, 113, 0.4);
+  color: var(--critical);
+}
+
+.control-btn--danger:hover:not(:disabled) {
+  border-color: var(--critical);
+}
+
+.control-btn--ghost {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.control-status {
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  min-height: 18px;
+}
+
 .section-heading {
   text-align: center;
   margin: 44px 0 22px;
@@ -400,6 +479,25 @@ select:focus-visible,
   50% {
     opacity: 0.45;
   }
+}
+
+.stage-node--active {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.stage-node--active-ok {
+  border-color: var(--ok);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.5), 0 0 18px rgba(52, 211, 153, 0.25);
+}
+
+.stage-node--active-pending {
+  border-color: var(--warn);
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.5), 0 0 18px rgba(251, 191, 36, 0.25);
+}
+
+.stage-node--active-failed {
+  border-color: var(--critical);
+  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.55), 0 0 18px rgba(248, 113, 113, 0.3);
 }
 
 .stage-connector {

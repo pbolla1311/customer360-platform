@@ -1,8 +1,9 @@
 import html
+import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path as FilesystemPath
-from typing import Any, cast
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import (
     APIRouter,
@@ -17,7 +18,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -26,13 +27,25 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from customer360.api.audit_logging import AuditLoggingMiddleware
+from customer360.api.pipeline_simulation_engine import (
+    ENGINE,
+    AuditEntry,
+    FailureType,
+    PipelineEngineError,
+)
 from customer360.api.pipeline_telemetry import (
+    HealthStatus,
+    KpiMetrics,
+    PipelineSummary,
+    ServiceHealth,
+    StageMetric,
     build_charts,
     build_customer_flow,
     build_event_stream,
     build_service_health,
     build_summary,
     compute_kpis,
+    status_from_thresholds,
 )
 from customer360.api.security import verify_api_key
 from customer360.api.security_headers import SecurityHeadersMiddleware
@@ -87,6 +100,8 @@ class CustomerProfileResponse(BaseModel):
     transaction_count: int
     total_spend: float
     average_transaction_value: float
+    status: str
+    tags: list[str]
     created_at: datetime
     updated_at: datetime
 
@@ -173,6 +188,95 @@ class PipelineCustomerFlowStepResponse(BaseModel):
     status: str
 
 
+class TraceStepResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    stage: str
+    status: str
+    processing_time_ms: float
+    timestamp: datetime
+
+
+class SimulatedEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    event_id: str
+    event_type: str
+    customer_id: str
+    created_at: datetime
+    status: str
+    retry_count: int
+    failure_type: str | None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def correlation_id(self) -> str:
+        # Deterministic (same event_id -> same correlation_id always), not
+        # a stored engine field -- every event this engine has ever produced
+        # (Control Center actions and real customer edits alike) gets one
+        # for free, with zero changes to pipeline_simulation_engine.py.
+        return f"corr-{self.event_id}"
+
+
+class AuditDetailResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    actor: str
+    changes: list[str]
+    before: dict[str, Any]
+    after: dict[str, Any]
+
+
+class EventTraceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    event: SimulatedEventResponse
+    steps: list[TraceStepResponse]
+    replay: bool
+    audit: AuditDetailResponse | None = None
+
+
+class PipelineStateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    current_event: SimulatedEventResponse | None
+    consumer_healthy: bool
+    generated_count: int
+    success_count: int
+    failed_count: int
+    retry_queue_count: int
+    dlq_count: int
+    has_replayable_event: bool
+
+
+class InjectFailureRequest(BaseModel):
+    failure_type: FailureType
+
+
+class CustomerUpdateRequest(BaseModel):
+    first_name: str | None = Field(default=None, min_length=1, max_length=100)
+    last_name: str | None = Field(default=None, min_length=1, max_length=100)
+    email: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=255,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+    )
+    city: str | None = Field(default=None, min_length=1, max_length=100)
+    state: str | None = Field(default=None, min_length=1, max_length=100)
+    status: Literal["active", "archived"] | None = None
+    tags: (
+        list[Annotated[str, Field(min_length=1, max_length=40)]] | None
+    ) = Field(default=None, max_length=20)
+
+
+class CustomerUpdateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    profile: CustomerProfileResponse
+    trace: EventTraceResponse
+
+
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=[],
@@ -255,6 +359,14 @@ DEMO_PAGE_HTML = (
 
 PIPELINE_PAGE_HTML = (
     (STATIC_DIR / "demo" / "pipeline" / "index.html")
+    .read_text()
+    .replace("{{APP_TITLE}}", API_TITLE)
+    .replace("{{APP_VERSION}}", API_VERSION)
+)
+
+
+WORKSPACE_PAGE_HTML = (
+    (STATIC_DIR / "workspace" / "index.html")
     .read_text()
     .replace("{{APP_TITLE}}", API_TITLE)
     .replace("{{APP_VERSION}}", API_VERSION)
@@ -380,6 +492,22 @@ def redoc_init_js(
 v1 = APIRouter(prefix="/api/v1", tags=["v1"])
 
 
+def _parse_tags(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(tag) for tag in parsed]
+
+
+def _dump_tags(tags: list[str]) -> str:
+    return json.dumps(sorted(set(tags)))
+
+
 def serialize_profile(profile: Customer360Profile) -> dict[str, Any]:
     return {
         "customer_id": profile.customer_id,
@@ -391,6 +519,8 @@ def serialize_profile(profile: Customer360Profile) -> dict[str, Any]:
         "transaction_count": profile.transaction_count,
         "total_spend": profile.total_spend,
         "average_transaction_value": profile.average_transaction_value,
+        "status": profile.status,
+        "tags": _parse_tags(profile.tags),
         "created_at": profile.created_at,
         "updated_at": profile.updated_at,
     }
@@ -568,6 +698,11 @@ def get_customer(
     return serialize_profile(profile)
 
 
+@app.get("/workspace", include_in_schema=False)
+def workspace() -> HTMLResponse:
+    return HTMLResponse(WORKSPACE_PAGE_HTML)
+
+
 @app.get("/demo", include_in_schema=False)
 def demo_dashboard() -> HTMLResponse:
     return HTMLResponse(DEMO_PAGE_HTML)
@@ -711,6 +846,81 @@ def pipeline_dashboard() -> HTMLResponse:
     return HTMLResponse(PIPELINE_PAGE_HTML)
 
 
+# Stages the Control Center engine can move counts through. Producer/Kafka
+# Topic count every generated event; Consumer counts only ones that
+# eventually succeeded; Retry Queue/DLQ mirror the engine's own buckets
+# exactly (see PipelineSimulationEngine.get_state). Outbox and PostgreSQL
+# are deliberately absent: Outbox already reflects real inserted rows via
+# _real_pipeline_inputs, and PostgreSQL must stay strictly real.
+_ENGINE_STAGE_DELTA_KEYS: dict[str, str] = {
+    "Producer": "generated_count",
+    "Kafka Topic": "generated_count",
+    "Consumer": "success_count",
+    "Retry Queue": "retry_queue_count",
+    "Dead Letter Queue": "dlq_count",
+}
+
+
+def _apply_engine_overlay_to_summary(summary: PipelineSummary) -> PipelineSummary:
+    """Additively overlays the Control Center engine's counters onto the
+    ambient (time-based) summary. At the engine's initial/reset state every
+    delta is 0, so this reproduces the pre-existing output exactly."""
+
+    state = ENGINE.get_state()
+    kpis = summary.kpis
+
+    overlaid_kpis = KpiMetrics(
+        messages_processed=kpis.messages_processed + state.generated_count,
+        successful_events=kpis.successful_events + state.success_count,
+        failed_events=kpis.failed_events + state.failed_count,
+        retry_queue=kpis.retry_queue + state.retry_queue_count,
+        dlq_messages=kpis.dlq_messages + state.dlq_count,
+        avg_processing_time_ms=kpis.avg_processing_time_ms,
+        events_per_sec=kpis.events_per_sec,
+        consumer_lag=kpis.consumer_lag,
+    )
+
+    overlaid_stages = []
+    for stage in summary.stages:
+        delta_key = _ENGINE_STAGE_DELTA_KEYS.get(stage.name)
+        if delta_key is None:
+            overlaid_stages.append(stage)
+            continue
+
+        new_count = stage.count + getattr(state, delta_key)
+        if stage.name == "Retry Queue":
+            new_status = status_from_thresholds(new_count, warning=10, critical=20)
+        elif stage.name == "Dead Letter Queue":
+            new_status = status_from_thresholds(new_count, warning=3, critical=8)
+        else:
+            new_status = stage.status
+        overlaid_stages.append(StageMetric(stage.name, new_count, new_status))
+
+    return PipelineSummary(
+        generated_at=summary.generated_at, kpis=overlaid_kpis, stages=overlaid_stages
+    )
+
+
+def _apply_engine_overlay_to_services(services: list[ServiceHealth]) -> list[ServiceHealth]:
+    """Only ever pushes the Consumer card toward CRITICAL -- never masks a
+    real ambient warning, and never touches Database/API (strictly real)."""
+
+    if ENGINE.get_state().consumer_healthy:
+        return services
+
+    return [
+        ServiceHealth(
+            name=service.name,
+            status=HealthStatus.CRITICAL,
+            latency_ms=service.latency_ms,
+            last_heartbeat=service.last_heartbeat,
+        )
+        if service.name == "Consumer"
+        else service
+        for service in services
+    ]
+
+
 @app.get(
     "/demo/api/pipeline/summary",
     response_model=PipelineSummaryResponse,
@@ -728,7 +938,8 @@ def pipeline_summary(
         real_outbox_pending=outbox_pending,
         db_reachable=db_reachable,
     )
-    return PipelineSummaryResponse.model_validate(summary)
+    overlaid = _apply_engine_overlay_to_summary(summary)
+    return PipelineSummaryResponse.model_validate(overlaid)
 
 
 @app.get(
@@ -769,7 +980,8 @@ def pipeline_services(
     now = datetime.now(UTC)
     kpis = compute_kpis(now, real_customer_count=customer_count)
     services = build_service_health(now, db_reachable=db_reachable, kpis=kpis)
-    return [PipelineServiceResponse.model_validate(service) for service in services]
+    overlaid = _apply_engine_overlay_to_services(services)
+    return [PipelineServiceResponse.model_validate(service) for service in overlaid]
 
 
 @app.get(
@@ -822,6 +1034,269 @@ def pipeline_customer_flow(
 
     steps = build_customer_flow(customer_id, profile.created_at)
     return [PipelineCustomerFlowStepResponse.model_validate(step) for step in steps]
+
+
+# ---------------------------------------------------------------------------
+# Pipeline Control Center -- interactive actions layered on top of the
+# passive dashboard above. See customer360/api/pipeline_simulation_engine.py
+# for why this needs real (in-process, shared) state, unlike everything
+# else on this page.
+# ---------------------------------------------------------------------------
+
+
+def _engine_real_customer_ids(session: Session) -> tuple[str, ...]:
+    try:
+        return tuple(Customer360Repository(session).list_customer_ids(limit=10))
+    except RepositoryError:
+        session.rollback()
+        return ()
+
+
+def _engine_session_or_none(session: Session) -> Session | None:
+    _customer_count, _outbox_pending, db_reachable = _real_pipeline_inputs(session)
+    return session if db_reachable else None
+
+
+@app.post(
+    "/demo/api/pipeline/generate",
+    response_model=EventTraceResponse,
+    include_in_schema=False,
+)
+@limiter.limit("20/minute")
+def pipeline_generate_event(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> EventTraceResponse:
+    trace = ENGINE.generate_event(
+        session=_engine_session_or_none(session),
+        real_customer_ids=_engine_real_customer_ids(session),
+    )
+    return EventTraceResponse.model_validate(trace)
+
+
+@app.post(
+    "/demo/api/pipeline/replay",
+    response_model=EventTraceResponse,
+    responses={
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorResponse,
+            "description": "No event has been generated yet",
+        },
+    },
+    include_in_schema=False,
+)
+@limiter.limit("30/minute")
+def pipeline_replay_event(request: Request) -> EventTraceResponse:
+    try:
+        trace = ENGINE.replay_last_event()
+    except PipelineEngineError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    return EventTraceResponse.model_validate(trace)
+
+
+@app.post(
+    "/demo/api/pipeline/failure",
+    response_model=EventTraceResponse,
+    include_in_schema=False,
+)
+@limiter.limit("20/minute")
+def pipeline_inject_failure(
+    request: Request,
+    body: InjectFailureRequest,
+    session: Session = Depends(get_db_session),
+) -> EventTraceResponse:
+    trace = ENGINE.inject_failure(
+        body.failure_type,
+        session=_engine_session_or_none(session),
+        real_customer_ids=_engine_real_customer_ids(session),
+    )
+    return EventTraceResponse.model_validate(trace)
+
+
+@app.post(
+    "/demo/api/pipeline/retry",
+    response_model=EventTraceResponse,
+    responses={
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorResponse,
+            "description": "No failed event to retry",
+        },
+    },
+    include_in_schema=False,
+)
+@limiter.limit("30/minute")
+def pipeline_retry_event(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> EventTraceResponse:
+    try:
+        trace = ENGINE.retry_failed_event(session=_engine_session_or_none(session))
+    except PipelineEngineError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    return EventTraceResponse.model_validate(trace)
+
+
+@app.post(
+    "/demo/api/pipeline/recover",
+    response_model=PipelineStateResponse,
+    include_in_schema=False,
+)
+@limiter.limit("20/minute")
+def pipeline_recover_consumer(request: Request) -> PipelineStateResponse:
+    state = ENGINE.recover_consumer()
+    return PipelineStateResponse.model_validate(state)
+
+
+@app.post(
+    "/demo/api/pipeline/reset",
+    response_model=PipelineStateResponse,
+    include_in_schema=False,
+)
+@limiter.limit("6/minute")
+def pipeline_reset_demo(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> PipelineStateResponse:
+    state = ENGINE.reset(session=_engine_session_or_none(session))
+    return PipelineStateResponse.model_validate(state)
+
+
+@app.get(
+    "/demo/api/pipeline/state",
+    response_model=PipelineStateResponse,
+    include_in_schema=False,
+)
+@limiter.limit("60/minute")
+def pipeline_get_state(request: Request) -> PipelineStateResponse:
+    return PipelineStateResponse.model_validate(ENGINE.get_state())
+
+
+@app.get(
+    "/demo/api/pipeline/history",
+    response_model=list[EventTraceResponse],
+    include_in_schema=False,
+)
+@limiter.limit("60/minute")
+def pipeline_history(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+) -> list[EventTraceResponse]:
+    return [
+        EventTraceResponse.model_validate(trace)
+        for trace in ENGINE.get_trace_history(limit=limit)
+    ]
+
+
+# ---------------------------------------------------------------------------
+# /workspace -- Customer360 Cloud. A real customer edit here is the one
+# action in this file that mutates real customer data (not just simulation
+# state): it updates the Customer360Profile row, then hands the resulting
+# change off to the same ENGINE the Control Center above uses, so the
+# Workspace's Event Center/Pipeline/Monitoring/Analytics/Audit Logs views
+# all see it without any separate "generate event" step. Kept alongside the
+# other /demo/api/* routes (same unauthenticated, rate-limited, seeded-
+# fictional-data-only surface) rather than /api/v1 -- see docs/ARCHITECTURE.md.
+# ---------------------------------------------------------------------------
+
+
+@app.patch(
+    "/demo/api/customers/{customer_id}",
+    response_model=CustomerUpdateResponse,
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": "Customer not found",
+        },
+    },
+    include_in_schema=False,
+)
+@limiter.limit("20/minute")
+def demo_update_customer(
+    request: Request,
+    body: CustomerUpdateRequest,
+    customer_id: str = Path(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+    session: Session = Depends(get_db_session),
+) -> CustomerUpdateResponse:
+    repository = Customer360Repository(session)
+    profile = repository.get_by_customer_id(customer_id)
+
+    if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Customer not found",
+        )
+
+    before: dict[str, Any] = {
+        "first_name": profile.first_name,
+        "last_name": profile.last_name,
+        "email": profile.email,
+        "city": profile.city,
+        "state": profile.state,
+        "status": profile.status,
+        "tags": _parse_tags(profile.tags),
+    }
+
+    if body.first_name is not None:
+        profile.first_name = body.first_name
+    if body.last_name is not None:
+        profile.last_name = body.last_name
+    if body.email is not None:
+        profile.email = body.email
+    if body.city is not None:
+        profile.city = body.city
+    if body.state is not None:
+        profile.state = body.state
+    if body.status is not None:
+        profile.status = body.status
+    if body.tags is not None:
+        profile.tags = _dump_tags(list(body.tags))
+
+    updated = repository.update(profile)
+
+    after: dict[str, Any] = {
+        "first_name": updated.first_name,
+        "last_name": updated.last_name,
+        "email": updated.email,
+        "city": updated.city,
+        "state": updated.state,
+        "status": updated.status,
+        "tags": _parse_tags(updated.tags),
+    }
+
+    changes = [key for key in before if before[key] != after[key]]
+
+    if "status" in changes and after["status"] == "archived":
+        event_type = "Account Archived"
+    elif "email" in changes:
+        event_type = "Email Changed"
+    elif "city" in changes or "state" in changes:
+        event_type = "Address Changed"
+    else:
+        event_type = "Customer Updated"
+
+    audit = (
+        AuditEntry(actor="Workspace User", changes=changes, before=before, after=after)
+        if changes
+        else None
+    )
+
+    trace = ENGINE.record_customer_update(
+        customer_id, event_type, session=session, audit=audit
+    )
+
+    return CustomerUpdateResponse(
+        profile=CustomerProfileResponse.model_validate(serialize_profile(updated)),
+        trace=EventTraceResponse.model_validate(trace),
+    )
 
 
 app.include_router(v1)

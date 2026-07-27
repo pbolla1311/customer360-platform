@@ -4,6 +4,7 @@ import re
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 os.environ["API_KEY"] = "test-api-key"
 # Forces the landing page's LinkedIn link into its unconfigured, placeholder
@@ -13,9 +14,11 @@ os.environ["AUTHOR_LINKEDIN_URL"] = ""
 
 import customer360.api.main as main_module
 from customer360.api.main import app
+from customer360.api.pipeline_simulation_engine import ENGINE, EventStatus
 from customer360.infrastructure.models import Customer360Profile
 from customer360.infrastructure.repository import Customer360Repository
 from customer360.infrastructure.session import Base, get_db_session
+from customer360.outbox.repository import OutboxRepository
 
 client = TestClient(app)
 
@@ -86,11 +89,12 @@ def test_root_landing_page_has_github_stats_container():
         assert f'id="{stat_id}"' in response.text
 
 
-def test_root_landing_page_has_seven_live_deployment_links():
+def test_root_landing_page_has_eight_live_deployment_links():
     response = client.get("/")
 
-    assert response.text.count('class="demo-card"') == 7
+    assert response.text.count('class="demo-card"') == 8
     for href in (
+        "/workspace",
         "/demo",
         "/demo/pipeline",
         "/",
@@ -102,11 +106,11 @@ def test_root_landing_page_has_seven_live_deployment_links():
         assert f'href="{href}"' in response.text, href
 
 
-def test_root_landing_page_has_launch_demo_button():
+def test_root_landing_page_has_open_workspace_button():
     response = client.get("/")
 
-    assert 'href="/demo"' in response.text
-    assert "Launch Demo" in response.text
+    assert 'href="/workspace"' in response.text
+    assert "Open Workspace" in response.text
 
 
 def test_root_landing_page_new_tab_links_use_noopener_noreferrer():
@@ -552,6 +556,108 @@ def _unreachable_db_session():
         yield session
     finally:
         session.close()
+
+
+# ---------------------------------------------------------------------
+# /workspace (Customer360 Cloud)
+# ---------------------------------------------------------------------
+
+
+def test_workspace_page_returns_ok():
+    response = client.get("/workspace")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+
+
+def test_workspace_page_has_title_and_nav_items():
+    response = client.get("/workspace")
+
+    assert "Customer360 Cloud" in response.text
+    for label in (
+        "Overview",
+        "Customers",
+        "Event Center",
+        "Pipeline",
+        "Monitoring",
+        "Analytics",
+        "Audit Logs",
+        "API Explorer",
+        "Settings",
+    ):
+        assert label in response.text
+
+
+def test_workspace_page_embeds_pipeline_and_docs_via_iframe():
+    response = client.get("/workspace")
+
+    assert 'src="/demo/pipeline"' in response.text
+    assert 'src="/docs"' in response.text
+
+
+def test_workspace_page_has_no_inline_script():
+    response = client.get("/workspace")
+
+    assert INLINE_SCRIPT_PATTERN.findall(response.text) == []
+
+
+def test_workspace_page_has_no_inline_style():
+    response = client.get("/workspace")
+
+    assert INLINE_STYLE_PATTERN.findall(response.text) == []
+
+
+def test_workspace_page_has_no_inline_style_attributes():
+    response = client.get("/workspace")
+
+    assert re.findall(r'\sstyle="', response.text) == []
+
+
+def test_workspace_page_assets_resolve():
+    response = client.get("/workspace")
+
+    script_srcs = re.findall(r'<script[^>]*\bsrc="([^"]+)"', response.text)
+    stylesheet_hrefs = re.findall(
+        r'<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"', response.text
+    )
+
+    asset_urls = script_srcs + stylesheet_hrefs
+    assert "/static/workspace/workspace.js" in script_srcs
+    assert "/static/workspace/workspace-customers.js" in script_srcs
+    assert "/static/workspace/workspace-pipeline.js" in script_srcs
+    assert "/static/workspace/workspace-analytics.js" in script_srcs
+    assert "/static/workspace/workspace.css" in stylesheet_hrefs
+
+    for url in asset_urls:
+        assert url.startswith("/static/"), url
+        asset_response = client.get(url)
+        assert asset_response.status_code == 200, url
+
+
+def test_workspace_endpoint_excluded_from_openapi_schema():
+    schema = client.get("/openapi.json").json()
+    assert "/workspace" not in schema["paths"]
+
+
+def test_workspace_does_not_affect_existing_demo_dashboard():
+    """Regression: the new workspace shell must not change /demo."""
+
+    response = client.get("/demo")
+    assert response.status_code == 200
+    assert "Demo Dashboard" in response.text
+
+
+def test_workspace_does_not_affect_existing_pipeline_monitor():
+    """Regression: the new workspace shell must not change /demo/pipeline."""
+
+    response = client.get("/demo/pipeline")
+    assert response.status_code == 200
+    assert 'id="btn-generate"' in response.text
+
+
+# ---------------------------------------------------------------------
+# /demo dashboard
+# ---------------------------------------------------------------------
 
 
 def test_demo_page_returns_ok():
@@ -1000,3 +1106,834 @@ def test_pipeline_monitor_does_not_affect_v1_demo_dashboard():
     response = client.get("/demo")
     assert response.status_code == 200
     assert "Demo Dashboard" in response.text
+
+# ---------------------------------------------------------------------
+# /demo/pipeline Control Center (interactive actions)
+# ---------------------------------------------------------------------
+#
+# Every test below either resets the shared ENGINE singleton first (it's
+# process-wide, exactly like the production "Reset Demo" button touches the
+# same shared state every visitor sees) or is itself read-only.
+
+
+def _shared_sqlite_session_override():
+    """Unlike _empty_sqlite_session/_populated_sqlite_session (a fresh,
+    throwaway in-memory DB per call), this keeps ONE in-memory database
+    alive across multiple requests/sessions -- needed to verify that a
+    POST /generate in one request actually persisted a row visible to a
+    later query, the same way the real app's one long-lived engine behaves
+    across per-request sessions."""
+
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        autocommit=False,
+        expire_on_commit=False,
+    )
+
+    def _override():
+        session = factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    return _override, factory
+
+
+def test_pipeline_generate_event_returns_a_happy_path_trace():
+    ENGINE.reset()
+    try:
+        response = client.post("/demo/api/pipeline/generate")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["event"]["status"] == "success"
+        assert body["replay"] is False
+        assert [step["stage"] for step in body["steps"]] == [
+            "Producer",
+            "Kafka Topic",
+            "Outbox",
+            "Consumer",
+            "PostgreSQL",
+        ]
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_generate_event_does_not_require_api_key():
+    ENGINE.reset()
+    try:
+        response = client.post("/demo/api/pipeline/generate")
+        assert response.status_code == 200
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_replay_without_a_prior_event_returns_409():
+    ENGINE.reset()
+    try:
+        response = client.post("/demo/api/pipeline/replay")
+        assert response.status_code == 409
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_replay_reuses_the_last_event_without_creating_a_new_one():
+    ENGINE.reset()
+    try:
+        generated = client.post("/demo/api/pipeline/generate").json()
+        replayed = client.post("/demo/api/pipeline/replay").json()
+
+        assert replayed["event"]["event_id"] == generated["event"]["event_id"]
+        assert replayed["replay"] is True
+
+        state = client.get("/demo/api/pipeline/state").json()
+        assert state["generated_count"] == 1
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_inject_failure_rejects_an_invalid_failure_type():
+    ENGINE.reset()
+    try:
+        response = client.post(
+            "/demo/api/pipeline/failure", json={"failure_type": "not-a-real-type"}
+        )
+        assert response.status_code == 422
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_inject_failure_marks_the_relevant_stage_and_retry_queue():
+    ENGINE.reset()
+    try:
+        response = client.post(
+            "/demo/api/pipeline/failure", json={"failure_type": "kafka_timeout"}
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["event"]["status"] == "failed"
+        failed_stages = [s["stage"] for s in body["steps"] if s["status"] == "failed"]
+        assert failed_stages == ["Kafka Topic"]
+
+        state = client.get("/demo/api/pipeline/state").json()
+        assert state["retry_queue_count"] == 1
+        assert state["consumer_healthy"] is False
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_retry_without_a_failed_event_returns_409():
+    ENGINE.reset()
+    try:
+        response = client.post("/demo/api/pipeline/retry")
+        assert response.status_code == 409
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_full_journey_fail_retry_recover_retry_succeeds():
+    ENGINE.reset()
+    try:
+        client.post("/demo/api/pipeline/generate")
+        client.post(
+            "/demo/api/pipeline/failure", json={"failure_type": "consumer_failure"}
+        )
+
+        still_failing = client.post("/demo/api/pipeline/retry").json()
+        assert still_failing["event"]["status"] == "failed"
+        assert still_failing["event"]["retry_count"] == 2
+
+        recovered = client.post("/demo/api/pipeline/recover").json()
+        assert recovered["consumer_healthy"] is True
+
+        succeeded = client.post("/demo/api/pipeline/retry").json()
+        assert succeeded["event"]["status"] == "success"
+        assert succeeded["steps"][-1]["stage"] == "PostgreSQL"
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_repeated_retries_reach_the_dlq():
+    ENGINE.reset()
+    try:
+        client.post(
+            "/demo/api/pipeline/failure", json={"failure_type": "database_timeout"}
+        )
+
+        last_body = None
+        for _ in range(6):
+            last_body = client.post("/demo/api/pipeline/retry").json()
+            if last_body["event"]["status"] == "dlq":
+                break
+
+        assert last_body is not None
+        assert last_body["event"]["status"] == "dlq"
+
+        state = client.get("/demo/api/pipeline/state").json()
+        assert state["dlq_count"] == 1
+        assert state["retry_queue_count"] == 0
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_recover_consumer_marks_the_consumer_service_card_healthy_again():
+    ENGINE.reset()
+    try:
+        client.post(
+            "/demo/api/pipeline/failure", json={"failure_type": "consumer_failure"}
+        )
+        services_while_unhealthy = client.get("/demo/api/pipeline/services").json()
+        consumer_unhealthy = next(
+            s for s in services_while_unhealthy if s["name"] == "Consumer"
+        )
+        assert consumer_unhealthy["status"] == "critical"
+
+        client.post("/demo/api/pipeline/recover")
+
+        services_after = client.get("/demo/api/pipeline/services").json()
+        consumer_after = next(s for s in services_after if s["name"] == "Consumer")
+        assert consumer_after["status"] != "critical"
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_reset_clears_state_back_to_idle():
+    ENGINE.reset()
+    try:
+        client.post("/demo/api/pipeline/generate")
+        client.post(
+            "/demo/api/pipeline/failure", json={"failure_type": "consumer_failure"}
+        )
+
+        response = client.post("/demo/api/pipeline/reset")
+
+        assert response.status_code == 200
+        state = response.json()
+        assert state == {
+            "current_event": None,
+            "consumer_healthy": True,
+            "generated_count": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "retry_queue_count": 0,
+            "dlq_count": 0,
+            "has_replayable_event": False,
+        }
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_summary_overlay_reflects_engine_deltas():
+    ENGINE.reset()
+    try:
+        before = client.get("/demo/api/pipeline/summary").json()
+
+        client.post("/demo/api/pipeline/generate")
+        client.post(
+            "/demo/api/pipeline/failure", json={"failure_type": "kafka_timeout"}
+        )
+
+        after = client.get("/demo/api/pipeline/summary").json()
+
+        # The ambient (time-based) half of these numbers ticks upward on
+        # its own between the two calls, so assert the engine's
+        # contribution is present (>=) rather than pinning an exact delta.
+        assert after["kpis"]["messages_processed"] >= before["kpis"]["messages_processed"] + 1
+        assert after["kpis"]["failed_events"] >= before["kpis"]["failed_events"] + 1
+        assert after["kpis"]["retry_queue"] >= before["kpis"]["retry_queue"] + 1
+
+        producer_before = next(s for s in before["stages"] if s["name"] == "Producer")
+        producer_after = next(s for s in after["stages"] if s["name"] == "Producer")
+        assert producer_after["count"] >= producer_before["count"] + 1
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_summary_at_idle_engine_state_matches_pre_engine_behavior():
+    """Regression: with the Control Center untouched (freshly reset), the
+    summary endpoint's output must be identical to what it was before this
+    feature existed -- delta 0 must be a true no-op overlay."""
+
+    ENGINE.reset()
+    try:
+        response = client.get("/demo/api/pipeline/summary")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert set(body) == {"generated_at", "kpis", "stages", "simulated"}
+        assert [stage["name"] for stage in body["stages"]] == [
+            "Producer",
+            "Kafka Topic",
+            "Outbox",
+            "Consumer",
+            "Retry Queue",
+            "Dead Letter Queue",
+            "PostgreSQL",
+        ]
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_control_center_endpoints_are_excluded_from_openapi_schema():
+    schema = client.get("/openapi.json").json()
+
+    for path in (
+        "/demo/api/pipeline/generate",
+        "/demo/api/pipeline/replay",
+        "/demo/api/pipeline/failure",
+        "/demo/api/pipeline/retry",
+        "/demo/api/pipeline/recover",
+        "/demo/api/pipeline/reset",
+        "/demo/api/pipeline/state",
+    ):
+        assert path not in schema["paths"], path
+
+
+def test_pipeline_generate_persists_a_real_outbox_row_when_db_available():
+    ENGINE.reset()
+    override, factory = _shared_sqlite_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.post("/demo/api/pipeline/generate")
+        event_id = response.json()["event"]["event_id"]
+
+        session = factory()
+        try:
+            row = OutboxRepository(session).get_by_event_id(event_id)
+            assert row is not None
+            assert row.status == "PUBLISHED"
+        finally:
+            session.close()
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_pipeline_reset_deletes_the_outbox_rows_it_created():
+    ENGINE.reset()
+    override, factory = _shared_sqlite_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.post("/demo/api/pipeline/generate")
+        event_id = response.json()["event"]["event_id"]
+
+        client.post("/demo/api/pipeline/reset")
+
+        session = factory()
+        try:
+            assert OutboxRepository(session).get_by_event_id(event_id) is None
+        finally:
+            session.close()
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_pipeline_generate_falls_back_to_in_memory_when_db_unreachable():
+    ENGINE.reset()
+    app.dependency_overrides[get_db_session] = _unreachable_db_session
+    try:
+        response = client.post("/demo/api/pipeline/generate")
+
+        assert response.status_code == 200
+        assert response.json()["event"]["status"] == "success"
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_pipeline_control_center_does_not_affect_existing_api_v1_customers():
+    """Regression: the interactive engine must not touch the real,
+    authenticated versioned endpoints."""
+
+    ENGINE.reset()
+    try:
+        client.post("/demo/api/pipeline/generate")
+
+        unauthenticated = client.get("/api/v1/customers")
+        assert unauthenticated.status_code == 401
+
+        authenticated = client.get("/api/v1/customers", headers=AUTH_HEADERS)
+        assert authenticated.status_code == 200
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_engine_status_values_round_trip_through_the_api():
+    ENGINE.reset()
+    try:
+        body = client.post("/demo/api/pipeline/generate").json()
+        assert body["event"]["status"] == EventStatus.SUCCESS.value
+    finally:
+        ENGINE.reset()
+
+
+# ---------------------------------------------------------------------
+# GET /demo/api/pipeline/history (Customer360 Cloud workspace: Event
+# Center / Audit Logs)
+# ---------------------------------------------------------------------
+
+
+def test_pipeline_history_is_empty_at_idle_engine_state():
+    ENGINE.reset()
+    try:
+        response = client.get("/demo/api/pipeline/history")
+        assert response.status_code == 200
+        assert response.json() == []
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_history_reflects_generated_events_most_recent_first():
+    ENGINE.reset()
+    try:
+        first = client.post("/demo/api/pipeline/generate").json()
+        second = client.post("/demo/api/pipeline/generate").json()
+
+        history = client.get("/demo/api/pipeline/history").json()
+
+        assert [entry["event"]["event_id"] for entry in history[:2]] == [
+            second["event"]["event_id"],
+            first["event"]["event_id"],
+        ]
+        assert history[0]["steps"][0]["stage"] == "Producer"
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_history_respects_limit_query_param():
+    ENGINE.reset()
+    try:
+        for _ in range(3):
+            client.post("/demo/api/pipeline/generate")
+
+        history = client.get("/demo/api/pipeline/history?limit=1").json()
+        assert len(history) == 1
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_history_endpoint_excluded_from_openapi_schema():
+    schema = client.get("/openapi.json").json()
+    assert "/demo/api/pipeline/history" not in schema["paths"]
+
+
+# ---------------------------------------------------------------------
+# PATCH /demo/api/customers/{customer_id} (Customer360 Cloud workspace:
+# Customers edit -> DB -> Outbox -> Pipeline -> Audit Logs)
+# ---------------------------------------------------------------------
+
+
+def _customer_update_session_override():
+    """Same shape as _shared_sqlite_session_override, but pre-seeds one
+    editable customer -- needed here (unlike the Control Center tests) so
+    the PATCH under test has a real row to load, mutate, and persist."""
+
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        autocommit=False,
+        expire_on_commit=False,
+    )
+
+    seed_session = factory()
+    Customer360Repository(seed_session).create(
+        Customer360Profile(
+            customer_id="CLOUD-TEST-0001",
+            first_name="Ada",
+            last_name="Lovelace",
+            email="ada@example.com",
+            city="London",
+            state="LDN",
+            transaction_count=2,
+            total_spend=42.0,
+            average_transaction_value=21.0,
+        )
+    )
+    seed_session.close()
+
+    def _override():
+        session = factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    return _override, factory
+
+
+def test_update_customer_persists_changes_and_returns_updated_profile():
+    ENGINE.reset()
+    override, factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"city": "Manchester", "state": "MCR"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["profile"]["city"] == "Manchester"
+        assert body["profile"]["state"] == "MCR"
+        assert body["trace"]["event"]["event_type"] == "Address Changed"
+        assert body["trace"]["event"]["customer_id"] == "CLOUD-TEST-0001"
+        assert body["trace"]["event"]["status"] == "success"
+
+        verify_session = factory()
+        try:
+            persisted = Customer360Repository(verify_session).get_by_customer_id(
+                "CLOUD-TEST-0001"
+            )
+            assert persisted is not None
+            assert persisted.city == "Manchester"
+            assert persisted.state == "MCR"
+        finally:
+            verify_session.close()
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_email_change_is_labeled_email_changed():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"email": "ada.lovelace@example.com"},
+        )
+        assert response.status_code == 200
+        assert response.json()["trace"]["event"]["event_type"] == "Email Changed"
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_name_only_change_is_labeled_customer_updated():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"first_name": "Augusta"},
+        )
+        assert response.status_code == 200
+        assert response.json()["trace"]["event"]["event_type"] == "Customer Updated"
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_appears_in_pipeline_history():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"city": "Manchester"},
+        )
+        history = client.get("/demo/api/pipeline/history").json()
+        assert history[0]["event"]["customer_id"] == "CLOUD-TEST-0001"
+        assert history[0]["event"]["event_type"] == "Address Changed"
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_not_found_returns_404():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/does-not-exist",
+            json={"city": "Nowhere"},
+        )
+        assert response.status_code == 404
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_rejects_invalid_email():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"email": "not-an-email"},
+        )
+        assert response.status_code == 422
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_rejects_blank_field():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"first_name": ""},
+        )
+        assert response.status_code == 422
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_rejects_invalid_customer_id_characters():
+    response = client.patch(
+        "/demo/api/customers/bad%20id",
+        json={"city": "Nowhere"},
+    )
+    assert response.status_code == 422
+
+
+def test_update_customer_does_not_require_api_key():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"city": "Manchester"},
+        )
+        assert response.status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_endpoint_excluded_from_openapi_schema():
+    schema = client.get("/openapi.json").json()
+    assert "/demo/api/customers/{customer_id}" not in schema["paths"]
+
+
+def test_update_customer_persists_a_real_outbox_row_when_db_available():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"city": "Manchester"},
+        )
+        event_id = response.json()["trace"]["event"]["event_id"]
+
+        verify_session = _factory()
+        try:
+            outbox_row = OutboxRepository(verify_session).get_by_event_id(event_id)
+            assert outbox_row is not None
+            assert outbox_row.status == "PUBLISHED"
+        finally:
+            verify_session.close()
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+# ---------------------------------------------------------------------
+# PATCH /demo/api/customers/{customer_id} -- v3.0 additions: status/
+# archive, tags, correlation_id, and the before/after audit trail
+# ---------------------------------------------------------------------
+
+
+def test_new_customer_defaults_to_active_status_and_no_tags():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.get("/demo/api/customers/CLOUD-TEST-0001")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "active"
+        assert body["tags"] == []
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_can_archive_and_is_labeled_account_archived():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"status": "archived"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["profile"]["status"] == "archived"
+        assert body["trace"]["event"]["event_type"] == "Account Archived"
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_can_restore_an_archived_customer():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"status": "archived"},
+        )
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"status": "active"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["profile"]["status"] == "active"
+        assert body["trace"]["event"]["event_type"] == "Customer Updated"
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_rejects_invalid_status_value():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"status": "banned"},
+        )
+        assert response.status_code == 422
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_tags_are_deduplicated_and_sorted():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"tags": ["vip", "enterprise", "vip"]},
+        )
+        assert response.status_code == 200
+        assert response.json()["profile"]["tags"] == ["enterprise", "vip"]
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_rejects_too_many_tags():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"tags": [f"tag-{i}" for i in range(21)]},
+        )
+        assert response.status_code == 422
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_response_includes_correlation_id():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"city": "Manchester"},
+        )
+        event = response.json()["trace"]["event"]
+        assert event["correlation_id"] == f"corr-{event['event_id']}"
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_includes_audit_before_after_and_changes():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"city": "Manchester", "state": "MCR"},
+        )
+        audit = response.json()["trace"]["audit"]
+        assert audit["actor"] == "Workspace User"
+        assert set(audit["changes"]) == {"city", "state"}
+        assert audit["before"]["city"] == "London"
+        assert audit["before"]["state"] == "LDN"
+        assert audit["after"]["city"] == "Manchester"
+        assert audit["after"]["state"] == "MCR"
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_with_no_actual_changes_has_no_audit():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"first_name": "Ada"},
+        )
+        assert response.status_code == 200
+        assert response.json()["trace"]["audit"] is None
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_pipeline_history_entries_from_control_center_have_no_audit():
+    ENGINE.reset()
+    try:
+        response = client.post("/demo/api/pipeline/generate")
+        assert response.json()["audit"] is None
+
+        history = client.get("/demo/api/pipeline/history").json()
+        assert history[0]["audit"] is None
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_history_entries_include_correlation_id():
+    ENGINE.reset()
+    try:
+        generated = client.post("/demo/api/pipeline/generate").json()
+        history = client.get("/demo/api/pipeline/history").json()
+        assert history[0]["event"]["correlation_id"] == (
+            f"corr-{generated['event']['event_id']}"
+        )
+    finally:
+        ENGINE.reset()

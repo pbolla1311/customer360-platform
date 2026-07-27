@@ -1,112 +1,425 @@
 # Current Task
 
-## Task: Build Enterprise Pipeline Monitoring Dashboard (v1.1 follow-on)
+## Task: Customer360 Cloud v3.0 — Enterprise Customer Data Platform
 
+**Branch:** `feature/customer360-cloud-v3` (created from `feature/customer360-cloud-v2`)
 **Status:** Complete
 **Started / Completed:** 2026-07-27
 
 ### What shipped
 
-A flagship `/demo/pipeline` page (Datadog/Confluent-Cloud-style) that
-demonstrates the platform's Kafka/outbox/retry/DLQ architecture: 8 animated
-KPI cards, an animated 7-stage pipeline visualization, a live-scrolling
-event stream, 6 Chart.js charts, 6 service health cards, and a per-customer
-illustrative event-flow timeline. No existing route, auth, or test changed
-behavior — only additions.
+Completed the customer lifecycle (Status/Archive/Tags) and added the
+fields a real ops/audit product needs (Correlation ID, before/after audit
+diffs), plus the cross-cutting features that make the workspace feel
+finished: Global Search, a Notification Center, a tabbed Customer Profile,
+and enhanced Monitoring/Analytics/Overview views — all layered on the
+v2.0 workspace shell and existing backend, per the task's "do not rewrite"
+instruction.
 
-### Two decisions made without re-asking (extending the v1.1 `/demo` precedent)
+### Key design decisions
 
-1. **Chart.js vendored locally** — `customer360/api/static/demo/vendor/chart.umd.min.js`
-   (4.5.1, MIT), same pattern as the pre-existing vendored
-   `swagger-ui-bundle.js`/`redoc.standalone.js`. Satisfies "use Chart.js or
-   ECharts" while keeping `script-src 'self'`, no CDN, no `unsafe-eval`.
-2. **Real data stays real; everything with no live backing is a labeled,
-   deterministic simulation**, not random noise and not fabricated. See
-   README → Pipeline Monitor for the exact real/simulated table. In short:
-   real = `PostgreSQL` stage, `Database`/`API` service cards, real
-   `outbox_events` count if any exist, a selected customer's real
-   `created_at`. Simulated = the other 6 stages, `Kafka`/`Consumer`/`Outbox`/
-   `Scheduler` service cards, all 8 KPIs except what's listed above, the
-   event stream, and all 6 charts.
+(See docs/ARCHITECTURE.md → "Workspace Lifecycle & Audit Trail (v3.0)"
+and README → "v3.0: full customer lifecycle, audit trail, search &
+notifications" for the full reasoning.)
+
+1. **One additive migration** (`fddaf5d4cd64`, real `op.add_column` calls
+   — unlike three of the four prior migrations, which were empty stubs;
+   fixed the pattern going forward rather than repeating it): `status`
+   (`active`/`archived`, default `active`) and `tags` (JSON-in-`TEXT`,
+   default `[]`) on `customer360_profiles`. **Customer Score stays
+   computed, never a column** — confirmed with the user before writing
+   the migration, matching the app's existing "derived, not fabricated"
+   convention (same as the pre-existing Active/Dormant label).
+2. **Correlation ID needed zero engine changes.** A Pydantic
+   `@computed_field` (`corr-{event_id}`) on `SimulatedEventResponse` gives
+   every event response a deterministic correlation ID for free.
+3. **Audit trail is one new dataclass + one optional field.**
+   `AuditEntry(actor, changes, before, after)` and `EventTrace.audit:
+   AuditEntry | None = None` (defaulted -- every existing construction
+   site unaffected). `record_customer_update()` threads it through as-is;
+   the engine never computes the diff itself, only `main.py`'s
+   `demo_update_customer` handler does, via one `before`/`after` snapshot
+   whose `changes` list **replaced and generalized** v2's separate
+   `email_changed`/`address_changed` booleans.
+4. **Archive/Restore reuse the existing `PATCH` endpoint** (no new
+   route), matching "reuse existing APIs."
+5. **Orders tab is an honest aggregate**, not fabricated per-order rows —
+   this schema has no per-order ledger.
+6. **Monitoring's "Service Uptime" is an instantaneous snapshot**
+   (healthy/total right now), explicitly not a fabricated historical
+   percentage, since no service-status history is stored anywhere.
+7. **Overview's "Upcoming Tasks" only surfaces real, nonzero signals**
+   (DLQ depth, retry-queue depth, archived-customer count) — never a
+   generic fabricated to-do list.
+8. **Global Search and the Notification Center are pure client-side
+   aggregation** over data other views already fetch (`/demo/api/customers`,
+   `/demo/api/pipeline/history`, `/services`) — zero new backend
+   endpoints. Notification unread state uses a `localStorage` timestamp
+   (no session/auth concept exists to hang it off of).
+9. **Customer Profile deep-linking via `history.replaceState`**, not
+   `location.hash` — updates the URL to `#/customers/{id}` without firing
+   a redundant `hashchange` (the view isn't changing). `parseViewFromHash`
+   was generalized to take only the first path segment so existing plain
+   `#/customers` links are unaffected; a new `parseHashParam` extracts the
+   id for direct/shared URLs and Global Search results. Explicitly a
+   simplification, not full router history — documented as a known
+   limitation (no back/forward stepping through past selections).
+10. **`PipelineViewLogic` and `AnalyticsLogic` exposed on `window`**
+    (mirroring v2's `window.WorkspaceLogic`/`window.Workspace` pattern) so
+    the Customers view's Events/Pipeline Trace tabs and Overview's growth
+    sparkline can reuse existing stage-derivation/ISO-week logic instead
+    of duplicating it — safe regardless of `<script>` tag order, since
+    every `DOMContentLoaded` handler only runs after all four workspace
+    scripts have finished executing their top-level code.
 
 ### Files changed/added
 
-- `customer360/api/pipeline_telemetry.py` — pure, deterministic simulation
-  engine (23 unit tests, no FastAPI/DB/Kafka needed).
-- `customer360/api/main.py` — `/demo/pipeline` + 5 `/demo/api/pipeline/*`
-  routes, a briefly-cached `_real_pipeline_inputs()` helper.
-- `customer360/infrastructure/repository.py` — added `count_all()` and
-  `list_customer_ids()` (efficient, single-purpose queries; avoids
-  over-fetching full rows just to count/sample IDs).
-- `customer360/api/static/demo/pipeline/{index.html,pipeline.css,pipeline.js}`,
-  `customer360/api/static/demo/vendor/chart.umd.min.js` — new.
-- Nav updates: `/demo` header, landing page Live Deployment card + footer
-  link + a new "Pipeline Monitor" feature card.
-- Tests: `tests/api/test_pipeline_telemetry.py` (23),
-  `tests/api/test_pipeline_js.py` (11, Node shell-out), ~28 new tests in
-  `tests/api/test_main.py` (routes/assets/CSP/empty/error/regression), plus
-  2 new repository tests.
-- Docs: README "Pipeline Monitor" section + endpoint table + Limitations/
-  Roadmap/Tech-Stack updates; `docs/ARCHITECTURE.md` new "Demo & Pipeline
-  Monitoring Layer" section; `pyproject.toml` package-data.
+- `alembic/versions/fddaf5d4cd64_*.py` — new migration.
+- `customer360/infrastructure/models.py` — `status`, `tags` columns.
+- `customer360/api/pipeline_simulation_engine.py` — `AuditEntry`,
+  `EventTrace.audit`, `record_customer_update(audit=...)`.
+- `customer360/api/main.py` — `correlation_id` computed field,
+  `AuditDetailResponse`, `EventTraceResponse.audit`, customer
+  `status`/`tags` fields, `_parse_tags`/`_dump_tags` helpers, PATCH
+  handler rewritten around one before/after snapshot.
+- `customer360/api/static/workspace/index.html` — status filter,
+  pagination controls, tabbed Customer Profile (6 tabs), Pipeline
+  current-event strip, Monitoring uptime KPI + 2 charts, Analytics CLV/
+  Active Customers/Pipeline Metrics KPIs, Overview growth sparkline/
+  Upcoming Tasks/Quick Actions, topbar Global Search + Notification
+  Center.
+- `customer360/api/static/workspace/workspace.css` — tabs, filters,
+  pagination, tag chips, score badge, archive actions, topbar search/
+  notification dropdown styles.
+- `customer360/api/static/workspace/workspace.js` — `parseHashParam`,
+  `buildNotifications`, `countUnread`, `runGlobalSearch`,
+  `deriveUpcomingTasks`, `getHashParam`, growth sparkline, Global
+  Search + Notification Center DOM wiring.
+- `customer360/api/static/workspace/workspace-customers.js` — status
+  filter, tag diffing, Customer Score, pagination, tabbed profile
+  rendering (Overview/Timeline/Orders/Events/Audit/Trace), archive
+  toggle, hash-based deep-linking.
+- `customer360/api/static/workspace/workspace-pipeline.js` — Correlation
+  ID column, Pipeline current-event strip, Monitoring charts + uptime
+  snapshot, Audit Logs before/after rendering, `window.PipelineViewLogic`
+  export.
+- `customer360/api/static/workspace/workspace-analytics.js` — CLV,
+  Active Customers, pipeline success rate, `window.AnalyticsLogic` export.
+- Tests: `tests/api/test_pipeline_simulation_engine.py` (+4),
+  `tests/api/test_main.py` (+11 PATCH status/tags/audit/correlation_id
+  cases, +2 pipeline/history cases), `tests/api/test_workspace_js.py`
+  (+17), `tests/api/test_workspace_customers_js.py` (+16),
+  `tests/api/test_workspace_pipeline_js.py` (+3),
+  `tests/api/test_workspace_analytics_js.py` (+7).
+- Docs: `docs/ARCHITECTURE.md` new section; `README.md` new v3.0
+  subsection + updated API/Data-Model tables + Limitations; `CHANGELOG.md`
+  populated (was empty) with v1.1–v3.0 entries.
 
 ### Verified
 
-- `pytest -q`: **183 passed**, 0 failed, 0 skipped (183 = 124 pre-existing at
-  the start of this task + 59 new: 23 in `test_pipeline_telemetry.py`, 11 in
-  `test_pipeline_js.py`, 22 pipeline-specific in `test_main.py`, 3 in
-  `test_repository.py`).
-- `ruff check .` clean. `mypy customer360` (matches CI) clean, 0 issues
-  across 32 files.
-- Wheel build includes the new pipeline/vendor assets (`unzip -l` verified).
-- `docker build` succeeds; ran the built image against the real local
-  Postgres (via `host.docker.internal`), hit every new endpoint, and
-  confirmed the `PostgreSQL` stage exactly matched the real row count (5).
-- Playwright (headless Chromium) against a live local server at 1440×900
-  and 390×844: zero console errors, zero CSP violations, zero horizontal
-  overflow (after one fix — see below), 7 stage nodes, 6 service cards, 6
-  charts with actually-painted pixels, working customer-flow select, and
-  KPI/count-up values that were non-zero and animated.
-- **One real bug found and fixed during browser verification:** `.panel`
-  (a CSS grid item) had no `min-width: 0`, so the pipeline visualization's
-  internal `overflow-x: auto` scroller wasn't containing its child's
-  `min-width: 760px` — it was widening the whole grid item instead, causing
-  horizontal page overflow on mobile. Fixed in `pipeline.css`. Also added
-  `-webkit-backdrop-filter` for Safari.
-- **One real bug found and fixed during test-writing:** the module-level
-  cache in `_real_pipeline_inputs()` doesn't know about
-  `dependency_overrides`, so tests that swap the DB session need to reset
-  it first (documented and added in `test_main.py`) — this is fine in
-  production (small staleness window is the intended trade-off) but broke
-  test isolation until fixed.
-
-Note on the local dev environment: at the start of this task, `docker-compose`'s
-`postgres`/`kafka` containers had exited (unrelated to any code change —
-they'd stopped since the last session). This caused the *existing* test
-suite to fail before I'd changed anything. Restarted both via
-`docker compose up -d postgres kafka` and re-verified 150 pre-existing tests
-passed clean before adding anything new.
+- `pytest -q`: **364 passed**, 0 failed (306 at session start + 58 new).
+- `ruff check .` clean, `mypy customer360` clean (33 source files).
+- `alembic upgrade head` applied cleanly against the real local Postgres
+  dev database (previously only had the baseline table — three of the
+  four prior migrations turned out to be empty stubs, a pre-existing gap
+  this migration did not repeat).
+- Manual curl-driven end-to-end run: archived a seeded customer with
+  tags → confirmed the real DB row updated independently of the response,
+  the event was labeled `"Account Archived"`, `correlation_id` and the
+  full `audit` before/after block were present in both the PATCH response
+  and `GET /demo/api/pipeline/history`, tags were deduplicated/sorted, and
+  `/demo`/`/demo/pipeline`/`/docs` remained unaffected.
+- CSP compliance re-verified on the expanded `/workspace` HTML: zero
+  inline `<script>`/`<style>`, zero `style="..."` attributes.
+- **One a11y bug caught by IDE diagnostics before it shipped**: the
+  Archive toggle button was authored with dynamically-set-only text
+  (empty at parse time), which the accessibility linter flagged as
+  "no discernible text." Fixed by giving it static default text
+  ("Archive Customer") that JS then updates.
+- **One ARIA bug caught by IDE diagnostics**: the Notification Center
+  dropdown was given `role="menu"` with a plain `<ul>` child, which
+  requires `menuitem` children specifically. Fixed by dropping the
+  `role` in favor of a plain `aria-label`, since full menu keyboard
+  semantics weren't being implemented anyway.
 
 ### Known limitations
 
-- Everything in the "simulated" column of the Pipeline Monitor README table
-  will keep looking exactly the same until the outbox pattern is wired in
-  and a consumer worker is actually deployed (pre-existing gaps, not
-  introduced or hidden by this task — see Roadmap).
-- Chart.js's 208KB vendored bundle is the single largest static asset added;
-  acceptable for a demo page, but worth knowing if bundle size becomes a
-  concern later.
-- Screenshot files for the new README checklist weren't captured to
-  `docs/images/` (same as the v1.1 task) — left as a checklist.
+- Same global-engine caveat as v1.2/v2.0.
+- Monitoring's Service Uptime, Overview's Upcoming Tasks, and the
+  Notification Center's unread counter are all explicitly scoped as
+  described above (instant snapshot / real-signals-only / per-browser)
+  — see README → Limitations for the full list.
+- Customer Profile deep-linking has no back/forward history stepping.
+- No screenshot checklist added for the v3.0 UI changes (same standing
+  gap noted for prior tasks' pages).
+- The four `test_workspace_*_js.py` files (and `test_demo_js.py`/
+  `test_pipeline_js.py`) still aren't wired into the CI `quality` job —
+  flagged after v1.1, v1.2, and v2.0 too, still not done.
+
+---
+
+## Task: Customer360 Cloud v2.0 — Workspace Transformation
+
+**Branch:** `feature/customer360-cloud-v2` (created from `feature/pipeline-simulator-v1.2`)
+**Status:** Complete
+**Started / Completed:** 2026-07-27
+
+### What shipped
+
+A new `/workspace` shell — "Customer360 Cloud" — a single, sidebar-navigated
+SaaS-style workspace (Overview, Customers, Event Center, Pipeline,
+Monitoring, Analytics, Audit Logs, API Explorer, Settings) that tells one
+continuous story: editing a customer creates a real database update and a
+real outbox event that flows live through Event Center, Pipeline,
+Monitoring, Analytics, and Audit Logs — no manual "Generate Event" button
+anywhere in the workspace. `/demo`, `/demo/pipeline`, and every
+`/demo/api/*` route are byte-for-byte unchanged and still work standalone;
+the landing page's primary CTA now points at `/workspace` instead.
+
+### Key design decisions
+
+(See docs/ARCHITECTURE.md → "Workspace Shell (Customer360 Cloud, v2.0)"
+and README → "Customer360 Cloud Workspace" for the full reasoning.)
+
+1. **Two new backend routes, two new engine methods, one new internal
+   list — everything else reused.** `PATCH /demo/api/customers/{id}`
+   (updates the real `Customer360Profile` row via the existing
+   `Customer360Repository.update()`, diffs which field changed, and calls
+   new `PipelineSimulationEngine.record_customer_update()`) and
+   `GET /demo/api/pipeline/history` (new `ENGINE.get_trace_history()`,
+   backed by a new `_trace_history` list kept in sync everywhere
+   `_history` already was). No existing endpoint, repository method, or
+   `pipeline_telemetry.py` function changed.
+2. **Real edits always take the happy path.** `record_customer_update`
+   deliberately never fabricates a failure — Inject Failure stays the only
+   way to see a failure/retry/DLQ scenario, keeping "a customer edit
+   creates a real, successful event" honest.
+3. **Pipeline and API Explorer are literal reuse, not rebuilds**: same-origin
+   `<iframe src="/demo/pipeline">` / `<iframe src="/docs">`. Parent JS
+   reaches into the Pipeline iframe's same-origin `contentDocument` after
+   load to hide its own header and the "Generate Customer Event" button
+   only (real edits already produce events) — wrapped in try/catch so a
+   future structural change to `pipeline/index.html` degrades to "show the
+   full page" instead of breaking. Zero changes to `pipeline/index.html`,
+   `pipeline.js`, `pipeline.css`, or `/docs`.
+4. **Audit Logs and Event Center are the same data, rendered differently.**
+   Both read `GET /demo/api/pipeline/history`; Event Center shows one row
+   per event, Audit Logs expands each event's full per-stage trace
+   (Producer → Kafka Topic → Outbox → Consumer → PostgreSQL). No separate
+   audit-logging table or subsystem was built.
+5. **Overview/Analytics need zero new backend.** Revenue, growth-by-week,
+   customers-by-state, and top-customers are all computed client-side in
+   `workspace-analytics.js` from the existing `/demo/api/customers` list —
+   same convention `demo.js` already used for its illustrative timeline.
+6. **Customer edit scope: Name/Email/City/State only** (confirmed with the
+   user) — the fields that actually exist on `Customer360Profile`. No
+   migration, no new columns; Phone/Address/Status from the original spec
+   were explicitly descoped rather than inventing schema.
+7. **New `PATCH` endpoint stays unauthenticated**, matching the existing
+   `/demo/api/*` precedent (which already has mutating `POST` routes) —
+   scoped to the same seeded/fictional demo dataset, rate-limited at
+   20/min.
+
+### Files changed/added
+
+- `customer360/api/pipeline_simulation_engine.py` — `_trace_history` list,
+  `get_trace_history()`, `record_customer_update()`.
+- `customer360/api/main.py` — `CustomerUpdateRequest`/`CustomerUpdateResponse`
+  models, `PATCH /demo/api/customers/{id}`, `GET /demo/api/pipeline/history`,
+  `WORKSPACE_PAGE_HTML` + `GET /workspace`.
+- `customer360/api/static/workspace/` — new: `index.html`, `workspace.css`,
+  `workspace.js` (shell/router/Overview/Settings), `workspace-customers.js`
+  (Customers view), `workspace-pipeline.js` (Event Center/Pipeline/
+  Monitoring/Audit Logs), `workspace-analytics.js` (Analytics).
+- `customer360/api/static/site/{index.html,styles.css}` — CTA now "Open
+  Workspace" → `/workspace`; demo grid gains a Workspace card and marks the
+  Demo Dashboard/Pipeline Monitor cards "Legacy"; footer gains a Workspace
+  link.
+- Tests: `tests/api/test_pipeline_simulation_engine.py` (+8),
+  `tests/api/test_main.py` (+10 `/workspace` page tests, +4
+  `/demo/api/pipeline/history` tests, +11 `PATCH .../customers/{id}` tests,
+  2 landing-page assertions updated for the new CTA/card count),
+  `tests/api/test_workspace_js.py`, `test_workspace_customers_js.py`,
+  `test_workspace_pipeline_js.py`, `test_workspace_analytics_js.py` (35
+  Node tests total, same `require()`-under-Node harness as `test_demo_js.py`).
+- Docs: `docs/ARCHITECTURE.md` new "Workspace Shell" section; README new
+  "Customer360 Cloud Workspace" section, legacy notes on Demo
+  Dashboard/Pipeline Monitor, updated API Endpoints table, Limitations,
+  and Roadmap.
+
+### Verified
+
+- `pytest -q`: **306 passed**, 0 failed (261 Python + 35 Node/JS; 253 at
+  session start + 53 new Python tests, minus/plus adjustments for the 2
+  updated landing-page assertions).
+- `ruff check .` clean, `mypy customer360` clean (33 source files).
+- `node --check` on all 4 new workspace `*.js` files; manual `require()`
+  smoke test confirmed every exported pure function resolves.
+- CSP compliance manually verified on `/workspace`'s rendered HTML: zero
+  inline `<script>`/`<style>` tags, zero `style="..."` attributes — same
+  regex checks the existing `/demo`/`/demo/pipeline` tests already use,
+  plus dedicated new tests for `/workspace`.
+- `markdownlint-cli2` on `README.md`/`docs/ARCHITECTURE.md`: no new
+  MD051 (broken link fragment) issues — caught and fixed one during review
+  (see "One real bug found" below); the 14 remaining MD049 issues are
+  pre-existing and unrelated to this change (confirmed via `git stash`).
+- **One real bug found and fixed before shipping**: `workspace.js`'s
+  `formatCurrency` computed cents from the *unrounded* value passed through
+  `formatThousands` (which itself rounds), so `formatCurrency(1234.5)`
+  produced `"$1,235.50"` instead of `"$1,234.50"`. Caught via a manual
+  Node smoke test before writing the formal test suite; fixed by flooring
+  the whole-unit part before formatting, with an added carry-over case for
+  cent-rounding spilling into the next whole unit (e.g. `999.995` →
+  `"$1,000.00"`), both now pinned by `test_workspace_js.py`.
+- **One real doc bug found and fixed**: changing the "Demo Dashboard"
+  section heading to include a "(legacy)" suffix silently changed its
+  GitHub anchor slug and broke three existing `#demo-dashboard` links
+  elsewhere in the README (caught by the IDE's markdownlint diagnostics,
+  confirmed with `markdownlint-cli2`). Fixed by keeping headings
+  (`## Demo Dashboard`, `## Pipeline Monitor`) unchanged and moving the
+  "legacy" callout into a blockquote in the body instead.
+
+### Known limitations
+
+- Same global-engine caveat as v1.2, now also visible in the Workspace:
+  `PipelineSimulationEngine` is one process-wide singleton, so one
+  visitor's customer edit or "Reset Demo" is visible to every other
+  visitor's Event Center/Audit Logs/Pipeline tab too.
+- The Workspace's Overview/Monitoring throughput and KPI baselines are
+  still `pipeline_telemetry.py`'s ambient, time-seeded simulation — a real
+  customer edit is reflected precisely as its own event/trace/timeline
+  entry, but doesn't move the ambient messages-processed/throughput
+  numbers those views also show.
+- No screenshot checklist added for `/workspace` (same standing gap noted
+  for the two prior tasks' pages).
+- `tests/api/test_demo_js.py`/`test_pipeline_js.py`/the four new
+  `test_workspace_*_js.py` files still aren't wired into the CI `quality`
+  job — flagged after the v1.1 and v1.2 tasks too, still not done.
+
+---
+
+## Task: Customer360 Platform v1.2 — Interactive Pipeline Simulator
+
+**Branch:** `feature/pipeline-simulator-v1.2`
+**Status:** Complete
+**Started / Completed:** 2026-07-27
+
+### What shipped
+
+A Control Center toolbar on `/demo/pipeline`: **Generate Customer Event**,
+**Replay Last Event**, **Inject Failure** (5 types), **Retry Failed
+Event**, **Recover Consumer**, **Reset Demo**. Animated stage highlighting
+plays out each action's trace; the passive dashboard's KPIs/stages/service
+cards visibly move as a result. No existing route, test, or auth changed
+behavior — only additions.
+
+### Key design decisions
+
+(See docs/ARCHITECTURE.md and README → Pipeline Control Center for the
+full reasoning.)
+
+1. **New stateful `PipelineSimulationEngine` singleton**, separate from
+   the (deliberately stateless) v1.1 `pipeline_telemetry.py`, which was
+   **not modified**. All 23 of its tests still pass unmodified — the
+   single source of truth for interactive state lives in the new module
+   only, per the task's own requirement.
+2. **Retry resolution is a deterministic rule, not a coin flip**: every
+   failure type maps to one shared recovery lever (`consumer_healthy`).
+   Retry succeeds iff healthy; otherwise it increments toward
+   `MAX_RETRIES = 5` (matches `OutboxEvent.max_retries`'s existing
+   default) before routing to the DLQ. Confirmed against the task's own
+   numbered success criteria (fail → *observe retries* → DLQ → recover →
+   retry succeeds) — the first version of this logic (retry always
+   resolves on the first attempt) didn't match that narrative and was
+   caught by writing the engine's own tests before wiring anything else.
+3. **Persistence is real when possible, never required.** `generate`/
+   `failure`/`retry` mirror outcomes into a real `outbox_events` row via
+   the *existing, unmodified* `OutboxRepository.add()`/`mark_published()`/
+   `increment_retry()` — reused, not reimplemented. One new, minimal
+   repository method was needed: `get_by_event_id()` (each HTTP request
+   gets a fresh session, so the engine can't hold an ORM object across
+   requests) and `delete_by_event_ids()` (for Reset's cleanup, scoped only
+   to this engine's own rows).
+4. **Existing `/demo/api/pipeline/summary` and `/services` responses are
+   additively overlaid** with the engine's deltas inside `main.py` (not
+   inside `pipeline_telemetry.py`). At the engine's idle state every delta
+   is 0 — pinned by a regression test.
+5. **The engine is a global singleton, not per-visitor** — a deliberate
+   reading of "single source of truth," documented as a known limitation
+   (two concurrent visitors share one demo state).
+
+### Files changed/added
+
+- `customer360/api/pipeline_simulation_engine.py` — new, stateful engine.
+- `customer360/api/main.py` — 6 `POST` + 1 `GET` route, plus
+  `_apply_engine_overlay_to_summary/_services` helpers.
+- `customer360/api/pipeline_telemetry.py` — one pure rename
+  (`_status_from_thresholds` → `status_from_thresholds`, now public so
+  `main.py` can reuse it for the overlay); zero behavior change.
+- `customer360/infrastructure/repository.py` — unchanged this task (already
+  had what was needed from the prior task).
+- `customer360/outbox/repository.py` — added `get_by_event_id()` and
+  `delete_by_event_ids()`.
+- `customer360/api/static/demo/pipeline/{index.html,pipeline.css,pipeline.js}` —
+  Control Center toolbar, stage-highlight animation, button-state syncing.
+- Tests: `tests/api/test_pipeline_simulation_engine.py` (21, zero DB/FastAPI
+  dependency), `tests/outbox/test_outbox_repository.py` (+4), ~30 new tests
+  in `tests/api/test_main.py` (routes, overlay, DB persistence/fallback,
+  regression, with explicit `ENGINE.reset()` isolation), +11 Node tests in
+  `tests/api/test_pipeline_js.py`.
+- Docs: README "Pipeline Control Center" subsection + endpoint table +
+  Limitations; `docs/ARCHITECTURE.md` new section.
+
+### Verified
+
+- `pytest -q`: **238 passed**, 0 failed (238 = 183 at session start + 55
+  new: 21 engine + 4 outbox-repo + ~11 pipeline.js + ~19 test_main.py
+  Control Center tests, roughly — exact split isn't load-bearing, the
+  count that matters is 0 failures).
+- `ruff check .` clean, `mypy customer360` clean (33 source files).
+- Wheel build succeeds, includes the new module.
+- Docker build succeeds; ran the built image against real local Postgres
+  and drove the entire journey via curl (generate → fail → retry-still-
+  failing → recover → retry-succeeds → reset), confirming real
+  `outbox_events` writes and cleanup.
+- Playwright (headless Chromium, 1440×1000 and 390×844): full click-through
+  of the same journey. Zero console errors, zero CSP violations, zero
+  horizontal overflow. Keyboard tab order reaches the toolbar buttons
+  right after the header nav (native `<button>`/`<select>` — free
+  Enter/Space activation and focus-visible outlines).
+- **One real bug found while writing engine tests, before any UI existed**:
+  my first retry design resolved every retry on the first attempt, which
+  contradicted the task's own "observe retries" (plural) → DLQ → recover →
+  retry-succeeds narrative. Rewrote `inject_failure`/`retry_failed_event`
+  around the shared `consumer_healthy` lever instead; all engine tests
+  re-verified against the corrected semantics.
+- **One real bug found via Playwright**: `setControlBusy(false)` was
+  re-enabling buttons using stale `buttonAvailability` for one round-trip,
+  before the async `/state` re-fetch landed — visible as replay/retry
+  briefly showing the *previous* action's enabled/disabled state. Fixed by
+  deriving availability synchronously from the trace already in hand.
+  (Two more apparent failures during manual verification turned out to be
+  bugs in the verification script's wait-conditions, not the app — e.g.
+  waiting for `!retryDisabled` after an action that's *supposed* to
+  disable retry again.)
+- **One flaky test found and fixed**: `test_pipeline_summary_overlay_reflects_engine_deltas`
+  asserted an exact `+1` delta, but the ambient (time-based) half of those
+  KPIs ticks upward on its own between two calls a few ms apart. Changed
+  to `>=` — still meaningful, no longer timing-sensitive.
+
+### Known limitations
+
+- Global (not per-session) engine state — see README → Limitations.
+- Chart/summary/service overlays only ever push toward "busier" or
+  "critical"; they don't yet make the ambient dashboard visibly react in
+  the charts' *historical* series, only the live summary/services values.
+- Screenshot checklist for the Control Center itself wasn't added to
+  `docs/images/` (same standing gap as the two prior tasks).
 
 ### Next task after this one
 
-Wire the same Node-based JS tests (`test_demo_js.py`, `test_pipeline_js.py`)
-into the CI `quality` job in `.github/workflows/tests.yml`, so a frontend
-regression in either dashboard fails CI the same way Ruff/mypy would. Right
-now that coverage only runs via local `pytest` (which already shells out to
-Node) — CI's `ubuntu-latest` runners have Node preinstalled, so this is
-close to a no-op addition, just an explicit step.
+Wire `test_demo_js.py`/`test_pipeline_js.py` into the CI `quality` job (flagged
+after the previous task too, still not done — now covering 3 frontend files).
 
 ---
 
@@ -114,21 +427,27 @@ close to a no-op addition, just an explicit step.
 
 **Tag:** `v1.2.0`
 **Title:** Customer360 Platform v1.2.0
-**Theme:** Enterprise Pipeline Monitoring Dashboard
+**Theme:** Pipeline Monitor + Interactive Pipeline Simulator
 
-> Adds `/demo/pipeline` — a Datadog/Confluent-Cloud-style monitoring
-> dashboard that visualizes the platform's Kafka, outbox-pattern, retry, and
-> dead-letter-queue architecture: 8 animated KPI cards, an animated 7-stage
-> pipeline flow, a live event stream, 6 charts (Chart.js, vendored locally,
-> no CDN), 6 service health cards, and a per-customer event-flow timeline.
+> `/demo/pipeline` is now a full enterprise-monitoring-style dashboard
+> *and* an interactive control center. On top of the v1.1 passive view
+> (8 KPI cards, 7-stage pipeline visualization, live event stream, 6
+> charts, 6 service health cards), visitors can now **Generate a
+> Customer Event**, **Replay** it, **Inject a Failure** (5 types),
+> **Retry**, **Recover the Consumer**, and **Reset** the demo — watching
+> the KPIs, stage colors, and service cards respond in real time.
 >
-> - The `PostgreSQL` stage and the `Database`/`API` service cards are real,
->   sourced from the live database; everything else that has no live Kafka
->   broker or consumer worker to back it is a deterministic, clearly
->   labeled simulation — never random, never presented as production
->   telemetry.
-> - New unauthenticated `/demo/api/pipeline/*` endpoints, reusing the same
->   repository layer as the real API. `/customers`, `/api/v1/*`, and the
->   v1.1 `/demo/api/*` endpoints are unchanged.
-> - No changes to auth, CSP, security headers, Swagger UI, ReDoc, or the
->   OpenAPI schema.
+> - Retry resolution is deterministic (no randomness): every failure
+>   type shares one recovery lever, so retrying while the consumer is
+>   still unhealthy keeps failing toward a fixed retry limit, then routes
+>   to the DLQ; recovering the consumer, then retrying, succeeds.
+> - When the database is reachable, actions mirror a real `outbox_events`
+>   row using the existing, unmodified `OutboxRepository` — reused, not
+>   reimplemented. Never required: the interactive demo works exactly the
+>   same with the database down.
+> - The passive v1.1 dashboard (`pipeline_telemetry.py`) was not modified;
+>   the new engine's counters are additively overlaid in `main.py` only.
+> - No changes to auth, CSP, security headers, Swagger UI, ReDoc, the
+>   OpenAPI schema, or any `/api/v1/*`/`/demo/api/*` endpoint from v1.1.
+> - Known limitation: the Control Center's state is shared globally
+>   across all visitors, not isolated per session.

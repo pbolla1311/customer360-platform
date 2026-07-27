@@ -86,6 +86,80 @@
     };
   }
 
+  var FAILURE_TYPE_LABELS = {
+    consumer_failure: "Consumer Failure",
+    kafka_timeout: "Kafka Timeout",
+    database_timeout: "Database Timeout",
+    serialization_error: "Serialization Error",
+    validation_failure: "Validation Failure",
+  };
+
+  function describeFailureType(failureType) {
+    return FAILURE_TYPE_LABELS[failureType] || failureType;
+  }
+
+  function computeButtonStates(state) {
+    var hasCurrentFailed = !!(state.current_event && state.current_event.status === "failed");
+    return {
+      replayDisabled: !state.has_replayable_event,
+      retryDisabled: !hasCurrentFailed,
+    };
+  }
+
+  function buildControlStatusMessage(action, trace) {
+    var event = trace.event;
+
+    if (action === "generate") {
+      return (
+        'Generated "' + event.event_type + '" for ' + event.customer_id + " -- delivered successfully."
+      );
+    }
+    if (action === "replay") {
+      return "Replayed the last event (" + event.event_id + ") -- pure visualization, no new writes.";
+    }
+    if (action === "failure") {
+      return (
+        "Injected " +
+        describeFailureType(event.failure_type) +
+        " on " +
+        event.event_id +
+        " -- now in the Retry Queue."
+      );
+    }
+    if (action === "retry") {
+      if (event.status === "success") {
+        return "Retry #" + event.retry_count + " succeeded -- " + event.event_id + " reached PostgreSQL.";
+      }
+      if (event.status === "dlq") {
+        return (
+          "Retry #" +
+          event.retry_count +
+          " exhausted the retry limit -- " +
+          event.event_id +
+          " moved to the Dead Letter Queue."
+        );
+      }
+      return (
+        "Retry #" +
+        event.retry_count +
+        " failed again -- " +
+        describeFailureType(event.failure_type) +
+        " is still active. Try Recover Consumer, then retry again."
+      );
+    }
+    return "";
+  }
+
+  function stageAnimationSchedule(steps, stepDurationMs) {
+    var duration = stepDurationMs || 450;
+    var cursor = 0;
+    return steps.map(function (step) {
+      var entry = { stage: step.stage, status: step.status, startMs: cursor, endMs: cursor + duration };
+      cursor += duration;
+      return entry;
+    });
+  }
+
   var PipelineLogic = {
     statusClass: statusClass,
     pickStatusColor: pickStatusColor,
@@ -93,6 +167,10 @@
     relativeTimeLabel: relativeTimeLabel,
     buildEventListModel: buildEventListModel,
     buildLineDataset: buildLineDataset,
+    describeFailureType: describeFailureType,
+    computeButtonStates: computeButtonStates,
+    buildControlStatusMessage: buildControlStatusMessage,
+    stageAnimationSchedule: stageAnimationSchedule,
   };
 
   if (typeof module !== "undefined" && module.exports) {
@@ -136,6 +214,15 @@
     var flowHint = document.getElementById("flow-hint");
     var flowTimeline = document.getElementById("flow-timeline");
 
+    var btnGenerate = document.getElementById("btn-generate");
+    var btnReplay = document.getElementById("btn-replay");
+    var failureTypeSelect = document.getElementById("failure-type-select");
+    var btnInjectFailure = document.getElementById("btn-inject-failure");
+    var btnRetry = document.getElementById("btn-retry");
+    var btnRecover = document.getElementById("btn-recover");
+    var btnReset = document.getElementById("btn-reset");
+    var controlStatus = document.getElementById("control-status");
+
     if (!flowTrack || !eventList || !servicesGrid) {
       return;
     }
@@ -148,6 +235,30 @@
           throw new Error("Request to " + url + " failed with " + response.status);
         }
         return response.json();
+      });
+    }
+
+    function postJson(url, body) {
+      var options = { method: "POST", cache: "no-store" };
+      if (body) {
+        options.headers = { "Content-Type": "application/json" };
+        options.body = JSON.stringify(body);
+      }
+
+      return fetch(url, options).then(function (response) {
+        return response
+          .json()
+          .catch(function () {
+            return null;
+          })
+          .then(function (data) {
+            if (!response.ok) {
+              var message =
+                (data && data.detail) || "Request to " + url + " failed with " + response.status;
+              throw new Error(message);
+            }
+            return data;
+          });
       });
     }
 
@@ -196,20 +307,8 @@
       return name.toLowerCase().replace(/\s+/g, "-");
     }
 
-    function renderStages(stages) {
-      var byName = {};
-      stages.forEach(function (stage) {
-        byName[stage.name] = stage;
-      });
-
-      flowTrack.textContent = "";
-
+    function buildStageNodes() {
       STAGE_ORDER.forEach(function (name, index) {
-        var stage = byName[name];
-        if (!stage) {
-          return;
-        }
-
         var node = document.createElement("div");
         node.className = "stage-node";
         node.id = "stage-" + stageSlug(name);
@@ -220,11 +319,10 @@
 
         var count = document.createElement("span");
         count.className = "stage-count";
-        count.textContent = PipelineLogic.formatThousands(stage.count);
+        count.textContent = "0";
 
         var dot = document.createElement("span");
-        dot.className = "stage-dot stage-dot--" + PipelineLogic.statusClass(stage.status);
-        dot.setAttribute("title", stage.status);
+        dot.className = "stage-dot stage-dot--healthy";
 
         node.appendChild(label);
         node.appendChild(count);
@@ -236,6 +334,29 @@
           connector.className = "stage-connector";
           flowTrack.appendChild(connector);
         }
+      });
+    }
+
+    // Updates existing stage nodes in place rather than destroying and
+    // rebuilding them on every poll -- animateTrace() below highlights
+    // these same node elements by id while an action's animation plays, so
+    // they need to survive a passive summary refresh landing mid-animation.
+    function renderStages(stages) {
+      if (flowTrack.children.length === 0) {
+        buildStageNodes();
+      }
+
+      stages.forEach(function (stage) {
+        var node = document.getElementById("stage-" + stageSlug(stage.name));
+        if (!node) {
+          return;
+        }
+        node.querySelector(".stage-count").textContent = PipelineLogic.formatThousands(
+          stage.count
+        );
+        var dot = node.querySelector(".stage-dot");
+        dot.className = "stage-dot stage-dot--" + PipelineLogic.statusClass(stage.status);
+        dot.setAttribute("title", stage.status);
       });
     }
 
@@ -533,6 +654,185 @@
         loadCustomerFlow(flowSelect.value);
       });
     }
+
+    // -- Control Center -----------------------------------------------
+
+    var controlBusy = false;
+    var buttonAvailability = { replayDisabled: true, retryDisabled: true };
+
+    function applyButtonStates() {
+      if (btnReplay) {
+        btnReplay.disabled = controlBusy || buttonAvailability.replayDisabled;
+      }
+      if (btnRetry) {
+        btnRetry.disabled = controlBusy || buttonAvailability.retryDisabled;
+      }
+      [btnGenerate, btnInjectFailure, btnRecover, btnReset].forEach(function (btn) {
+        if (btn) {
+          btn.disabled = controlBusy;
+        }
+      });
+    }
+
+    function setControlBusy(busy) {
+      controlBusy = busy;
+      applyButtonStates();
+    }
+
+    function syncControlState() {
+      fetchJson("/demo/api/pipeline/state")
+        .then(function (state) {
+          buttonAvailability = PipelineLogic.computeButtonStates(state);
+          applyButtonStates();
+        })
+        .catch(function () {});
+    }
+
+    function animateTrace(trace) {
+      var schedule = PipelineLogic.stageAnimationSchedule(trace.steps, 450);
+
+      schedule.forEach(function (entry) {
+        var node = document.getElementById("stage-" + stageSlug(entry.stage));
+        if (!node) {
+          return;
+        }
+        var activeClass =
+          "stage-node--active-" + (entry.status === "ok" ? "ok" : entry.status === "pending" ? "pending" : "failed");
+
+        window.setTimeout(function () {
+          node.classList.add("stage-node--active", activeClass);
+        }, entry.startMs);
+        window.setTimeout(function () {
+          node.classList.remove("stage-node--active", activeClass);
+        }, entry.endMs);
+      });
+
+      return schedule.length ? schedule[schedule.length - 1].endMs : 0;
+    }
+
+    function refreshAfterAction() {
+      loadSummary();
+      loadServices();
+      loadCharts();
+      syncControlState();
+    }
+
+    function runControlAction(actionName, requestFn) {
+      if (controlBusy) {
+        return;
+      }
+      setControlBusy(true);
+
+      requestFn()
+        .then(function (trace) {
+          var totalMs = animateTrace(trace);
+          if (controlStatus) {
+            controlStatus.textContent = PipelineLogic.buildControlStatusMessage(actionName, trace);
+          }
+          // Derived directly from the trace we already have, rather than
+          // waiting on refreshAfterAction()'s async /state re-fetch below --
+          // otherwise setControlBusy(false) would briefly re-enable buttons
+          // using the *previous* action's availability for one round-trip.
+          buttonAvailability = PipelineLogic.computeButtonStates({
+            current_event: trace.event,
+            has_replayable_event: true,
+          });
+          window.setTimeout(function () {
+            setControlBusy(false);
+            refreshAfterAction();
+          }, totalMs + 150);
+        })
+        .catch(function (err) {
+          if (controlStatus) {
+            controlStatus.textContent = (err && err.message) || "That action couldn't be completed right now.";
+          }
+          setControlBusy(false);
+        });
+    }
+
+    if (btnGenerate) {
+      btnGenerate.addEventListener("click", function () {
+        runControlAction("generate", function () {
+          return postJson("/demo/api/pipeline/generate");
+        });
+      });
+    }
+
+    if (btnReplay) {
+      btnReplay.addEventListener("click", function () {
+        runControlAction("replay", function () {
+          return postJson("/demo/api/pipeline/replay");
+        });
+      });
+    }
+
+    if (btnInjectFailure) {
+      btnInjectFailure.addEventListener("click", function () {
+        var failureType = failureTypeSelect ? failureTypeSelect.value : "consumer_failure";
+        runControlAction("failure", function () {
+          return postJson("/demo/api/pipeline/failure", { failure_type: failureType });
+        });
+      });
+    }
+
+    if (btnRetry) {
+      btnRetry.addEventListener("click", function () {
+        runControlAction("retry", function () {
+          return postJson("/demo/api/pipeline/retry");
+        });
+      });
+    }
+
+    if (btnRecover) {
+      btnRecover.addEventListener("click", function () {
+        if (controlBusy) {
+          return;
+        }
+        setControlBusy(true);
+        postJson("/demo/api/pipeline/recover")
+          .then(function (state) {
+            if (controlStatus) {
+              controlStatus.textContent =
+                "Consumer recovered -- it will process successfully on the next retry.";
+            }
+            buttonAvailability = PipelineLogic.computeButtonStates(state);
+            setControlBusy(false);
+            loadServices();
+          })
+          .catch(function (err) {
+            if (controlStatus) {
+              controlStatus.textContent = (err && err.message) || "Couldn't recover the consumer right now.";
+            }
+            setControlBusy(false);
+          });
+      });
+    }
+
+    if (btnReset) {
+      btnReset.addEventListener("click", function () {
+        if (controlBusy) {
+          return;
+        }
+        setControlBusy(true);
+        postJson("/demo/api/pipeline/reset")
+          .then(function (state) {
+            if (controlStatus) {
+              controlStatus.textContent = 'Demo reset -- click "Generate Customer Event" to start again.';
+            }
+            buttonAvailability = PipelineLogic.computeButtonStates(state);
+            setControlBusy(false);
+            refreshAfterAction();
+          })
+          .catch(function (err) {
+            if (controlStatus) {
+              controlStatus.textContent = (err && err.message) || "Couldn't reset the demo right now.";
+            }
+            setControlBusy(false);
+          });
+      });
+    }
+
+    syncControlState();
 
     loadSummary();
     loadEvents();
