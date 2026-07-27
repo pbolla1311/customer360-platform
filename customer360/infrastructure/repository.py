@@ -4,7 +4,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -95,6 +95,47 @@ class Customer360Repository:
 
             raise RepositoryError(
                 "Unable to list Customer 360 profiles."
+            ) from exc
+
+    def count_all(self) -> int:
+        """Total profile row count via a single aggregate query.
+
+        Distinct from list_all(): callers that only need a count (e.g. the
+        /demo/pipeline dashboard) should use this instead of len(list_all()),
+        which would fetch every column of every row just to discard them.
+        """
+
+        try:
+            statement = select(func.count()).select_from(Customer360Profile)
+
+            return self._session.scalar(statement) or 0
+
+        except SQLAlchemyError as exc:
+            logger.exception("Failed to count Customer 360 profiles")
+
+            raise RepositoryError(
+                "Unable to count Customer 360 profiles."
+            ) from exc
+
+    def list_customer_ids(self, limit: int = 10) -> Sequence[str]:
+        """A handful of customer_ids only -- avoids fetching full rows for
+        callers (e.g. the /demo/pipeline event stream) that just need a few
+        IDs to reference, not every column."""
+
+        try:
+            statement = (
+                select(Customer360Profile.customer_id)
+                .order_by(Customer360Profile.customer_id)
+                .limit(limit)
+            )
+
+            return self._session.scalars(statement).all()
+
+        except SQLAlchemyError as exc:
+            logger.exception("Failed to list Customer 360 customer IDs")
+
+            raise RepositoryError(
+                "Unable to list Customer 360 customer IDs."
             ) from exc
 
     def update(

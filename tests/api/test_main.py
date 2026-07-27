@@ -11,7 +11,10 @@ os.environ["API_KEY"] = "test-api-key"
 # placeholder-safety tests are deterministic.
 os.environ["AUTHOR_LINKEDIN_URL"] = ""
 
+import customer360.api.main as main_module
 from customer360.api.main import app
+from customer360.infrastructure.models import Customer360Profile
+from customer360.infrastructure.repository import Customer360Repository
 from customer360.infrastructure.session import Base, get_db_session
 
 client = TestClient(app)
@@ -83,11 +86,19 @@ def test_root_landing_page_has_github_stats_container():
         assert f'id="{stat_id}"' in response.text
 
 
-def test_root_landing_page_has_six_live_deployment_links():
+def test_root_landing_page_has_seven_live_deployment_links():
     response = client.get("/")
 
-    assert response.text.count('class="demo-card"') == 6
-    for href in ("/demo", "/", "/docs", "/redoc", "/openapi.json", "/health"):
+    assert response.text.count('class="demo-card"') == 7
+    for href in (
+        "/demo",
+        "/demo/pipeline",
+        "/",
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+        "/health",
+    ):
         assert f'href="{href}"' in response.text, href
 
 
@@ -183,6 +194,7 @@ def test_root_landing_page_footer_has_required_content_and_links():
 
     assert 'href="https://github.com/pbolla1311/customer360-platform"' in footer_html
     assert 'href="/demo"' in footer_html
+    assert 'href="/demo/pipeline"' in footer_html
     assert 'href="/docs"' in footer_html
     assert 'href="/redoc"' in footer_html
     assert 'href="/health"' in footer_html
@@ -401,7 +413,7 @@ def test_redoc_html_has_no_inline_script():
 
 
 def test_csp_is_strict_on_docs_and_redoc():
-    for path in ("/", "/docs", "/redoc", "/demo"):
+    for path in ("/", "/docs", "/redoc", "/demo", "/demo/pipeline"):
         response = client.get(path)
         csp = response.headers["Content-Security-Policy"]
 
@@ -514,6 +526,32 @@ def _empty_sqlite_session():
 def _broken_db_session():
     raise RuntimeError("simulated database outage")
     yield  # pragma: no cover -- generator must contain a yield to be a dependency
+
+
+def _unreachable_db_session():
+    """Yields a session successfully, but every query against it fails.
+
+    Unlike _broken_db_session (which fails before FastAPI even gets a
+    session), this simulates a DB that's down at query time -- the scenario
+    pipeline_telemetry's db_reachable/count fallbacks are actually meant to
+    degrade gracefully from, rather than a 500.
+    """
+
+    engine = create_engine(
+        "sqlite:////nonexistent-directory-for-tests/unreachable.db",
+        connect_args={"check_same_thread": False},
+    )
+    testing_session_factory = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        autocommit=False,
+        expire_on_commit=False,
+    )
+    session = testing_session_factory()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 def test_demo_page_returns_ok():
@@ -644,3 +682,321 @@ def test_demo_endpoints_are_excluded_from_openapi_schema():
 
     assert "/demo" not in schema["paths"]
     assert "/demo/api/customers" not in schema["paths"]
+
+
+# ---------------------------------------------------------------------
+# /demo/pipeline monitor
+# ---------------------------------------------------------------------
+
+
+def _reset_pipeline_real_inputs_cache() -> None:
+    """Pipeline endpoints cache real DB counts for a few seconds (see
+    main.py's _real_pipeline_inputs) so a burst of dashboard polls doesn't
+    repeat the same queries. That cache doesn't know about
+    dependency_overrides, so any test that swaps the DB session must clear
+    it first or it'll see a previous test's cached counts instead of its
+    own override.
+    """
+
+    main_module._pipeline_real_inputs_cache = None
+
+
+def _populated_sqlite_session():
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    testing_session_factory = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        autocommit=False,
+        expire_on_commit=False,
+    )
+    session = testing_session_factory()
+    Customer360Repository(session).create(
+        Customer360Profile(
+            customer_id="PIPE-TEST-0001",
+            first_name="Pipeline",
+            last_name="Tester",
+            email="pipeline.tester@example.com",
+            city="Testville",
+            state="TS",
+            transaction_count=4,
+            total_spend=88.0,
+            average_transaction_value=22.0,
+        )
+    )
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def test_pipeline_page_returns_ok():
+    response = client.get("/demo/pipeline")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+
+
+def test_pipeline_page_has_dashboard_title_and_nav():
+    response = client.get("/demo/pipeline")
+
+    assert "Pipeline Monitor" in response.text
+    assert 'href="/"' in response.text
+    assert 'href="/demo"' in response.text
+    assert 'href="/docs"' in response.text
+    assert 'href="/api/v1/customers"' in response.text
+    assert (
+        'href="https://github.com/pbolla1311/customer360-platform"'
+        in response.text
+    )
+
+
+def test_pipeline_page_has_no_inline_script():
+    response = client.get("/demo/pipeline")
+
+    assert INLINE_SCRIPT_PATTERN.findall(response.text) == []
+
+
+def test_pipeline_page_has_no_inline_style():
+    response = client.get("/demo/pipeline")
+
+    assert INLINE_STYLE_PATTERN.findall(response.text) == []
+
+
+def test_pipeline_page_assets_resolve():
+    response = client.get("/demo/pipeline")
+
+    script_srcs = re.findall(r'<script[^>]*\bsrc="([^"]+)"', response.text)
+    stylesheet_hrefs = re.findall(
+        r'<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"', response.text
+    )
+
+    assert "/static/demo/pipeline/pipeline.js" in script_srcs
+    assert "/static/demo/vendor/chart.umd.min.js" in script_srcs
+    assert "/static/demo/pipeline/pipeline.css" in stylesheet_hrefs
+
+    for url in script_srcs + stylesheet_hrefs:
+        assert url.startswith("/static/"), url
+        asset_response = client.get(url)
+        assert asset_response.status_code == 200, url
+
+
+def test_pipeline_page_shows_simulated_telemetry_notice():
+    response = client.get("/demo/pipeline")
+
+    assert "Simulated Pipeline Telemetry" in response.text
+
+
+def test_pipeline_summary_does_not_require_api_key():
+    response = client.get("/demo/api/pipeline/summary")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"generated_at", "kpis", "stages", "simulated"}
+    assert body["simulated"] is True
+    assert [stage["name"] for stage in body["stages"]] == [
+        "Producer",
+        "Kafka Topic",
+        "Outbox",
+        "Consumer",
+        "Retry Queue",
+        "Dead Letter Queue",
+        "PostgreSQL",
+    ]
+
+
+def test_pipeline_summary_postgres_stage_matches_real_customer_count():
+    _reset_pipeline_real_inputs_cache()
+    app.dependency_overrides[get_db_session] = _populated_sqlite_session
+    try:
+        response = client.get("/demo/api/pipeline/summary")
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        _reset_pipeline_real_inputs_cache()
+
+    postgres_stage = next(
+        stage for stage in response.json()["stages"] if stage["name"] == "PostgreSQL"
+    )
+    assert postgres_stage["count"] == 1
+    assert postgres_stage["status"] == "healthy"
+
+
+def test_pipeline_summary_empty_database_still_returns_valid_snapshot():
+    _reset_pipeline_real_inputs_cache()
+    app.dependency_overrides[get_db_session] = _empty_sqlite_session
+    try:
+        response = client.get("/demo/api/pipeline/summary")
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        _reset_pipeline_real_inputs_cache()
+
+    assert response.status_code == 200
+    postgres_stage = next(
+        stage for stage in response.json()["stages"] if stage["name"] == "PostgreSQL"
+    )
+    assert postgres_stage["count"] == 0
+
+
+def test_pipeline_summary_backend_failure_surfaces_as_error_status():
+    app.dependency_overrides[get_db_session] = _broken_db_session
+    error_client = TestClient(app, raise_server_exceptions=False)
+    try:
+        response = error_client.get("/demo/api/pipeline/summary")
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert response.status_code >= 500
+
+
+def test_pipeline_events_does_not_require_api_key():
+    response = client.get("/demo/api/pipeline/events")
+
+    assert response.status_code == 200
+    events = response.json()
+    assert len(events) == 12
+    for event in events:
+        assert set(event) == {"timestamp", "event_type", "status", "detail"}
+        assert event["status"] in {"healthy", "warning", "critical"}
+
+
+def test_pipeline_events_can_reference_real_seeded_customers():
+    app.dependency_overrides[get_db_session] = _populated_sqlite_session
+    try:
+        response = client.get("/demo/api/pipeline/events")
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert response.status_code == 200
+
+
+def test_pipeline_services_has_six_named_services():
+    response = client.get("/demo/api/pipeline/services")
+
+    assert response.status_code == 200
+    services = response.json()
+    assert [service["name"] for service in services] == [
+        "API",
+        "Database",
+        "Kafka",
+        "Consumer",
+        "Outbox",
+        "Scheduler",
+    ]
+    for service in services:
+        assert service["latency_ms"] > 0
+
+
+def test_pipeline_services_database_card_is_critical_when_db_unreachable():
+    _reset_pipeline_real_inputs_cache()
+    app.dependency_overrides[get_db_session] = _unreachable_db_session
+    try:
+        response = client.get("/demo/api/pipeline/services")
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        _reset_pipeline_real_inputs_cache()
+
+    assert response.status_code == 200
+    database_service = next(
+        service for service in response.json() if service["name"] == "Database"
+    )
+    assert database_service["status"] == "critical"
+    assert database_service["latency_ms"] > 100
+
+
+def test_pipeline_summary_degrades_gracefully_when_db_unreachable():
+    _reset_pipeline_real_inputs_cache()
+    app.dependency_overrides[get_db_session] = _unreachable_db_session
+    try:
+        response = client.get("/demo/api/pipeline/summary")
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        _reset_pipeline_real_inputs_cache()
+
+    assert response.status_code == 200
+    body = response.json()
+    postgres_stage = next(
+        stage for stage in body["stages"] if stage["name"] == "PostgreSQL"
+    )
+    assert postgres_stage["count"] == 0
+    assert postgres_stage["status"] == "critical"
+
+
+def test_pipeline_charts_has_all_six_series_plus_event_types():
+    response = client.get("/demo/api/pipeline/charts")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {
+        "messages_per_minute",
+        "retries_over_time",
+        "dlq_trend",
+        "success_series",
+        "failure_series",
+        "latency_ms",
+        "top_event_types",
+    }
+    assert len(body["messages_per_minute"]["categories"]) == 30
+    assert len(body["messages_per_minute"]["values"]) == 30
+    assert len(body["top_event_types"]["categories"]) == 8
+
+
+def test_pipeline_customer_flow_returns_six_ordered_steps():
+    app.dependency_overrides[get_db_session] = _populated_sqlite_session
+    try:
+        response = client.get("/demo/api/pipeline/customer/PIPE-TEST-0001")
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert response.status_code == 200
+    steps = response.json()
+    assert [step["label"] for step in steps] == [
+        "Profile Created",
+        "Events Produced",
+        "Kafka Published",
+        "Consumer Processed",
+        "Stored",
+        "Audit Logged",
+    ]
+
+
+def test_pipeline_customer_flow_not_found_returns_404():
+    response = client.get("/demo/api/pipeline/customer/does-not-exist")
+
+    assert response.status_code == 404
+
+
+def test_pipeline_customer_flow_rejects_invalid_characters():
+    response = client.get("/demo/api/pipeline/customer/bad%20id")
+
+    assert response.status_code == 422
+
+
+def test_pipeline_endpoints_are_excluded_from_openapi_schema():
+    schema = client.get("/openapi.json").json()
+
+    assert "/demo/pipeline" not in schema["paths"]
+    assert "/demo/api/pipeline/summary" not in schema["paths"]
+    assert "/demo/api/pipeline/customer/{customer_id}" not in schema["paths"]
+
+
+def test_pipeline_monitor_does_not_affect_existing_api_v1_customers():
+    """Regression: adding the pipeline monitor must not change the real,
+    authenticated versioned endpoints."""
+
+    unauthenticated = client.get("/api/v1/customers")
+    assert unauthenticated.status_code == 401
+
+    authenticated = client.get("/api/v1/customers", headers=AUTH_HEADERS)
+    assert authenticated.status_code == 200
+    assert isinstance(authenticated.json(), list)
+
+
+def test_pipeline_monitor_does_not_affect_v1_demo_dashboard():
+    """Regression: the pre-existing /demo dashboard keeps working unchanged."""
+
+    response = client.get("/demo")
+    assert response.status_code == 200
+    assert "Demo Dashboard" in response.text

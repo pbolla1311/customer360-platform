@@ -59,4 +59,6 @@ customer360 = [
     "api/static/redoc/*",
     "api/static/site/*",
     "api/static/demo/*",
+    "api/static/demo/pipeline/*",
+    "api/static/demo/vendor/*",
 ]

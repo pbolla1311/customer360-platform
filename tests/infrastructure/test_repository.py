@@ -114,3 +114,47 @@ def test_delete_missing_profile_returns_false(
     deleted = repository.delete("missing")
 
     assert deleted is False
+
+
+def test_count_all_returns_zero_for_empty_repository(
+    repository: Customer360Repository,
+) -> None:
+    assert repository.count_all() == 0
+
+
+def test_list_customer_ids_returns_only_ids_up_to_limit(
+    repository: Customer360Repository,
+) -> None:
+    for i in range(3):
+        repository.create(
+            Customer360Profile(
+                customer_id=f"ID-{i}",
+                first_name="A",
+                last_name="B",
+                email=f"a{i}@example.com",
+            )
+        )
+
+    ids = repository.list_customer_ids(limit=2)
+
+    assert len(ids) == 2
+    assert all(isinstance(customer_id, str) for customer_id in ids)
+
+
+def test_count_all_matches_list_all_length(
+    repository: Customer360Repository,
+    profile: Customer360Profile,
+) -> None:
+    repository.create(profile)
+    repository.create(
+        Customer360Profile(
+            customer_id="1002",
+            first_name="Jane",
+            last_name="Doe",
+            email="jane.doe@example.com",
+            city="Denver",
+            state="CO",
+        )
+    )
+
+    assert repository.count_all() == len(repository.list_all()) == 2

@@ -88,6 +88,44 @@ python scripts/seed_demo_customers.py --force
 
 ---
 
+## Pipeline Monitor
+
+**[`/demo/pipeline`](https://customer360-platform-production.up.railway.app/demo/pipeline)** is an enterprise-monitoring-style dashboard (think Datadog/Confluent Cloud) built to make the platform's event-driven architecture — Kafka, the outbox pattern, retries, dead-lettering, observability — visible at a glance: 8 animated KPI cards, an animated 7-stage pipeline visualization (Producer → Kafka Topic → Outbox → Consumer → Retry Queue → Dead Letter Queue → PostgreSQL), a live-scrolling event stream, 6 charts (Chart.js, vendored locally — see below), 6 service health cards, and a per-customer illustrative event-flow timeline.
+
+**Exact real-vs-simulated split** (the same distinction is shown on the page itself, via "Live data"/"Derived"/"Simulated" tags and a standing banner):
+
+| Real, from PostgreSQL | Simulated, from `customer360/api/pipeline_telemetry.py` |
+| --- | --- |
+| The `PostgreSQL` pipeline stage (= real customer count) | The other 6 pipeline stages (Producer, Kafka Topic, Outbox, Consumer, Retry Queue, DLQ) |
+| The `Database` and `API` service health cards | The `Kafka`, `Consumer`, `Outbox`, `Scheduler` service health cards |
+| The `outbox_events` row count, if any exist | Retry queue depth, DLQ depth, events/sec, consumer lag, avg processing time |
+| A selected customer's real `created_at` | The rest of that customer's "Profile Created → ... → Audit Logged" timeline |
+| — | All 6 charts, and the entire live event stream |
+
+**Why any of it is simulated at all:** Kafka isn't running on the live Railway deployment, there's no standalone `CustomerEventConsumer` worker deployed, and the `outbox_events` table has no live writers — all pre-existing facts already called out in [Limitations](#limitations), not something this feature changed. Rather than leave a "flagship" monitoring page either broken or fabricating arbitrary numbers, `pipeline_telemetry.py` is a **pure, deterministic function of a timestamp**: the same `now` always produces the same output (unit-tested directly, no FastAPI/DB/Kafka needed), values evolve smoothly across real wall-clock time via bounded sine-wave curves plus a time-bucketed seeded `random.Random` (never reseeded per request, so it's not noise), and the numbers are kept internally consistent by construction — `successful + failed == processed`, `retry_queue <= failed`, `dlq_messages <= failed`, latency and consumer lag stay in realistic bounded ranges. Nothing here is ever labeled as live production telemetry; every card and panel that isn't backed by a real query carries a visible "Simulated" tag, and the page has its own standing notice, same convention as `/demo`'s "Illustrative demo data" labels.
+
+**Chart.js is vendored, not CDN-loaded.** `customer360/api/static/demo/vendor/chart.umd.min.js` is Chart.js 4.5.1 (MIT), downloaded once and committed, served from `/static/demo/vendor/chart.umd.min.js` — same pattern as the pre-existing vendored `swagger-ui-bundle.js` and `redoc.standalone.js`. This keeps the strict CSP (`script-src 'self'`, no `unsafe-eval`, no third-party origins) intact; nothing on `/demo/pipeline` makes a request to any CDN.
+
+**New endpoints**, all unauthenticated for the same reason the rest of `/demo/api/*` is (see [Demo Dashboard](#demo-dashboard) above) and excluded from the OpenAPI schema:
+
+| Method | Path | Description |
+| :---: | --- | --- |
+| `GET` | `/demo/pipeline` | The dashboard HTML page |
+| `GET` | `/demo/api/pipeline/summary` | 8 KPIs + 7 pipeline stage counts/health |
+| `GET` | `/demo/api/pipeline/events` | Rolling 12-entry simulated event stream |
+| `GET` | `/demo/api/pipeline/services` | 6 service health cards |
+| `GET` | `/demo/api/pipeline/charts` | 6 time-series/categorical series for the charts |
+| `GET` | `/demo/api/pipeline/customer/{customer_id}` | 6-step illustrative event-flow timeline for one customer |
+
+### Pipeline Monitor screenshot checklist
+
+<!-- Capture after seeding demo data, then embed alongside the images in the Screenshots section below:
+  - [ ] docs/images/pipeline-monitor-desktop.png — /demo/pipeline at desktop width, charts loaded
+  - [ ] docs/images/pipeline-monitor-mobile.png  — /demo/pipeline at a mobile viewport, no horizontal scroll
+-->
+
+---
+
 ## Screenshots
 
 <div align="center">
@@ -324,7 +362,8 @@ sequenceDiagram
 | Rate limiting | SlowAPI |
 | Metrics | `prometheus-client` (definitions only — see [Limitations](#limitations)) |
 | Batch data processing | pandas |
-| Testing | pytest, pytest-cov, FastAPI `TestClient` |
+| Dashboard charts | Chart.js (vendored locally, no CDN — see [Pipeline Monitor](#pipeline-monitor)) |
+| Testing | pytest, pytest-cov, FastAPI `TestClient`, Node.js (pure frontend logic in `/demo` and `/demo/pipeline`) |
 | Lint / formatting | Ruff |
 | Type checking | mypy (strict mode) |
 | Containerization | Docker |
@@ -351,8 +390,14 @@ All customer-data endpoints are exposed twice: once unversioned (for the live do
 | `GET` | `/demo/api/summary` | none | 60/min | Demo-only summary counts |
 | `GET` | `/demo/api/customers` | none | 60/min | Demo-only customer list (same data/serialization as `/customers`, no key required) |
 | `GET` | `/demo/api/customers/{customer_id}` | none | 120/min | Demo-only single customer |
+| `GET` | `/demo/pipeline` | none | — | Pipeline monitor HTML page (see [Pipeline Monitor](#pipeline-monitor)) |
+| `GET` | `/demo/api/pipeline/summary` | none | 60/min | KPIs + pipeline stage counts/health |
+| `GET` | `/demo/api/pipeline/events` | none | 60/min | Simulated event stream |
+| `GET` | `/demo/api/pipeline/services` | none | 30/min | Service health cards |
+| `GET` | `/demo/api/pipeline/charts` | none | 30/min | Chart series |
+| `GET` | `/demo/api/pipeline/customer/{customer_id}` | none | 120/min | Per-customer event-flow timeline |
 
-The `/demo/api/*` routes are excluded from the OpenAPI schema — they exist to support the `/demo` page, not as part of the documented, versioned product API.
+The `/demo/api/*` and `/demo/api/pipeline/*` routes are excluded from the OpenAPI schema — they exist to support the `/demo` and `/demo/pipeline` pages, not as part of the documented, versioned product API.
 
 The API is currently **read-only** over HTTP — profile creation/updates happen through the batch ingestion pipeline, not through write endpoints (see [Limitations](#limitations)).
 
@@ -596,11 +641,12 @@ Being direct about the current gaps:
 - **No Streamlit dashboard exists**, despite `streamlit` being listed as a dependency and `apps/dashboard/` existing as an empty directory.
 - **AWS deployment is not live.** Terraform is validated in CI and Kubernetes manifests are included, but the workflow that would publish a container to AWS is disabled; Railway is the only environment actually running the app.
 - **Single static API key**, not per-client keys, OAuth, or user accounts.
+- **`/demo/pipeline`'s Kafka/consumer/outbox telemetry is simulated, not scraped from a live broker.** It's a direct, honest consequence of the two gaps above (no deployed consumer worker, outbox not wired in) — see [Pipeline Monitor](#pipeline-monitor) for exactly which numbers on that page are real vs. simulated, and why.
 
 ## Roadmap
 
 - Wire the outbox publisher into the batch/write path and run it on a schedule
-- Deploy `CustomerEventConsumer` as a standalone worker with a persisted (not in-memory) idempotency store
+- Deploy `CustomerEventConsumer` as a standalone worker with a persisted (not in-memory) idempotency store — this, plus the outbox item above, is what would let `/demo/pipeline` show real Kafka/retry/DLQ telemetry instead of simulated
 - Increment the existing Prometheus metrics from request middleware and expose `/metrics`
 - Add write endpoints (`POST`/`PATCH`) backed by the outbox pattern for at-least-once event delivery
 - Re-enable the AWS CD workflow and deploy the Terraform-defined infrastructure

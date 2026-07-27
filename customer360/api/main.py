@@ -1,5 +1,6 @@
 import html
-from datetime import datetime
+import time
+from datetime import UTC, datetime
 from pathlib import Path as FilesystemPath
 from typing import Any, cast
 
@@ -25,6 +26,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from customer360.api.audit_logging import AuditLoggingMiddleware
+from customer360.api.pipeline_telemetry import (
+    build_charts,
+    build_customer_flow,
+    build_event_stream,
+    build_service_health,
+    build_summary,
+    compute_kpis,
+)
 from customer360.api.security import verify_api_key
 from customer360.api.security_headers import SecurityHeadersMiddleware
 from customer360.config import (
@@ -34,9 +43,13 @@ from customer360.config import (
     CORS_ALLOWED_ORIGINS,
 )
 from customer360.infrastructure.models import Customer360Profile
-from customer360.infrastructure.repository import Customer360Repository
+from customer360.infrastructure.repository import (
+    Customer360Repository,
+    RepositoryError,
+)
 from customer360.infrastructure.session import get_db_session
 from customer360.logging_config import configure_logging
+from customer360.outbox.repository import OutboxRepository
 
 configure_logging()
 
@@ -82,6 +95,82 @@ class DemoSummaryResponse(BaseModel):
     total_customers: int
     active_profiles: int
     total_transactions: int
+
+
+class PipelineKpiResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    messages_processed: int
+    successful_events: int
+    failed_events: int
+    retry_queue: int
+    dlq_messages: int
+    avg_processing_time_ms: float
+    events_per_sec: float
+    consumer_lag: int
+
+
+class PipelineStageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    count: int
+    status: str
+
+
+class PipelineSummaryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    generated_at: datetime
+    kpis: PipelineKpiResponse
+    stages: list[PipelineStageResponse]
+    simulated: bool = True
+
+
+class PipelineEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    timestamp: datetime
+    event_type: str
+    status: str
+    detail: str
+
+
+class PipelineServiceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    status: str
+    latency_ms: float
+    last_heartbeat: datetime
+
+
+class PipelineChartSeriesResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    label: str
+    categories: list[str]
+    values: list[float]
+
+
+class PipelineChartsResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    messages_per_minute: PipelineChartSeriesResponse
+    retries_over_time: PipelineChartSeriesResponse
+    dlq_trend: PipelineChartSeriesResponse
+    success_series: PipelineChartSeriesResponse
+    failure_series: PipelineChartSeriesResponse
+    latency_ms: PipelineChartSeriesResponse
+    top_event_types: PipelineChartSeriesResponse
+
+
+class PipelineCustomerFlowStepResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    label: str
+    timestamp: datetime
+    status: str
 
 
 limiter = Limiter(
@@ -158,6 +247,14 @@ LANDING_PAGE_HTML = (
 
 DEMO_PAGE_HTML = (
     (STATIC_DIR / "demo" / "index.html")
+    .read_text()
+    .replace("{{APP_TITLE}}", API_TITLE)
+    .replace("{{APP_VERSION}}", API_VERSION)
+)
+
+
+PIPELINE_PAGE_HTML = (
+    (STATIC_DIR / "demo" / "pipeline" / "index.html")
     .read_text()
     .replace("{{APP_TITLE}}", API_TITLE)
     .replace("{{APP_VERSION}}", API_VERSION)
@@ -553,6 +650,178 @@ def demo_customer(
         )
 
     return serialize_profile(profile)
+
+
+# ---------------------------------------------------------------------------
+# /demo/pipeline -- see customer360/api/pipeline_telemetry.py for why almost
+# everything below is a labeled simulation rather than live Kafka/outbox
+# telemetry, and README -> Pipeline Monitor for the full writeup.
+# ---------------------------------------------------------------------------
+
+_PIPELINE_REAL_INPUTS_TTL_SECONDS = 3.0
+_pipeline_real_inputs_cache: tuple[float, tuple[int, int, bool]] | None = None
+
+
+def _real_pipeline_inputs(session: Session) -> tuple[int, int, bool]:
+    """(real_customer_count, real_outbox_pending, db_reachable), cached briefly.
+
+    The dashboard calls summary/events/services/charts within moments of each
+    other on every load and every poll; without this cache each of those
+    would repeat the same count queries against the same data.
+    """
+
+    global _pipeline_real_inputs_cache
+
+    now_monotonic = time.monotonic()
+    if (
+        _pipeline_real_inputs_cache is not None
+        and now_monotonic - _pipeline_real_inputs_cache[0]
+        < _PIPELINE_REAL_INPUTS_TTL_SECONDS
+    ):
+        return _pipeline_real_inputs_cache[1]
+
+    repository = Customer360Repository(session)
+
+    try:
+        customer_count = repository.count_all()
+    except RepositoryError:
+        session.rollback()
+        customer_count = 0
+
+    try:
+        outbox_pending = len(OutboxRepository(session).pending())
+    except SQLAlchemyError:
+        session.rollback()
+        outbox_pending = 0
+
+    try:
+        session.execute(text("SELECT 1"))
+        db_reachable = True
+    except SQLAlchemyError:
+        session.rollback()
+        db_reachable = False
+
+    result = (customer_count, outbox_pending, db_reachable)
+    _pipeline_real_inputs_cache = (now_monotonic, result)
+    return result
+
+
+@app.get("/demo/pipeline", include_in_schema=False)
+def pipeline_dashboard() -> HTMLResponse:
+    return HTMLResponse(PIPELINE_PAGE_HTML)
+
+
+@app.get(
+    "/demo/api/pipeline/summary",
+    response_model=PipelineSummaryResponse,
+    include_in_schema=False,
+)
+@limiter.limit("60/minute")
+def pipeline_summary(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> PipelineSummaryResponse:
+    customer_count, outbox_pending, db_reachable = _real_pipeline_inputs(session)
+    summary = build_summary(
+        datetime.now(UTC),
+        real_customer_count=customer_count,
+        real_outbox_pending=outbox_pending,
+        db_reachable=db_reachable,
+    )
+    return PipelineSummaryResponse.model_validate(summary)
+
+
+@app.get(
+    "/demo/api/pipeline/events",
+    response_model=list[PipelineEventResponse],
+    include_in_schema=False,
+)
+@limiter.limit("60/minute")
+def pipeline_events(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> list[PipelineEventResponse]:
+    repository = Customer360Repository(session)
+
+    try:
+        sample_customer_ids = tuple(repository.list_customer_ids(limit=10))
+    except RepositoryError:
+        session.rollback()
+        sample_customer_ids = ()
+
+    entries = build_event_stream(
+        datetime.now(UTC), sample_customer_ids=sample_customer_ids
+    )
+    return [PipelineEventResponse.model_validate(entry) for entry in entries]
+
+
+@app.get(
+    "/demo/api/pipeline/services",
+    response_model=list[PipelineServiceResponse],
+    include_in_schema=False,
+)
+@limiter.limit("30/minute")
+def pipeline_services(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> list[PipelineServiceResponse]:
+    customer_count, _outbox_pending, db_reachable = _real_pipeline_inputs(session)
+    now = datetime.now(UTC)
+    kpis = compute_kpis(now, real_customer_count=customer_count)
+    services = build_service_health(now, db_reachable=db_reachable, kpis=kpis)
+    return [PipelineServiceResponse.model_validate(service) for service in services]
+
+
+@app.get(
+    "/demo/api/pipeline/charts",
+    response_model=PipelineChartsResponse,
+    include_in_schema=False,
+)
+@limiter.limit("30/minute")
+def pipeline_charts(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> PipelineChartsResponse:
+    customer_count, _outbox_pending, _db_reachable = _real_pipeline_inputs(session)
+    now = datetime.now(UTC)
+    kpis = compute_kpis(now, real_customer_count=customer_count)
+    charts = build_charts(now, real_customer_count=customer_count, kpis=kpis)
+    return PipelineChartsResponse.model_validate(charts)
+
+
+@app.get(
+    "/demo/api/pipeline/customer/{customer_id}",
+    response_model=list[PipelineCustomerFlowStepResponse],
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": "Customer not found",
+        },
+    },
+    include_in_schema=False,
+)
+@limiter.limit("120/minute")
+def pipeline_customer_flow(
+    request: Request,
+    customer_id: str = Path(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+    session: Session = Depends(get_db_session),
+) -> list[PipelineCustomerFlowStepResponse]:
+    repository = Customer360Repository(session)
+    profile = repository.get_by_customer_id(customer_id)
+
+    if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Customer not found",
+        )
+
+    steps = build_customer_flow(customer_id, profile.created_at)
+    return [PipelineCustomerFlowStepResponse.model_validate(step) for step in steps]
 
 
 app.include_router(v1)
