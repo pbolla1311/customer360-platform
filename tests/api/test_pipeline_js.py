@@ -136,3 +136,136 @@ def test_build_line_dataset_can_disable_fill():
     )
 
     assert dataset["fill"] is False
+
+
+# ---------------------------------------------------------------------
+# Control Center pure logic (generate/replay/failure/retry button wiring)
+# ---------------------------------------------------------------------
+
+
+def test_describe_failure_type_returns_human_readable_labels():
+    assert _run_node("pipeline.describeFailureType('consumer_failure')") == "Consumer Failure"
+    assert _run_node("pipeline.describeFailureType('database_timeout')") == "Database Timeout"
+
+
+def test_describe_failure_type_falls_back_to_the_raw_value_for_unknown_types():
+    assert _run_node("pipeline.describeFailureType('mystery_failure')") == "mystery_failure"
+
+
+def test_compute_button_states_disables_replay_when_nothing_generated_yet():
+    state = {"current_event": None, "has_replayable_event": False}
+    result = _run_node(f"pipeline.computeButtonStates({json.dumps(state)})")
+
+    assert result == {"replayDisabled": True, "retryDisabled": True}
+
+
+def test_compute_button_states_enables_replay_once_something_exists():
+    state = {
+        "current_event": {"status": "success"},
+        "has_replayable_event": True,
+    }
+    result = _run_node(f"pipeline.computeButtonStates({json.dumps(state)})")
+
+    assert result == {"replayDisabled": False, "retryDisabled": True}
+
+
+def test_compute_button_states_enables_retry_only_when_current_event_failed():
+    state = {
+        "current_event": {"status": "failed"},
+        "has_replayable_event": True,
+    }
+    result = _run_node(f"pipeline.computeButtonStates({json.dumps(state)})")
+
+    assert result == {"replayDisabled": False, "retryDisabled": False}
+
+
+def test_compute_button_states_disables_retry_once_event_reaches_dlq():
+    state = {
+        "current_event": {"status": "dlq"},
+        "has_replayable_event": True,
+    }
+    result = _run_node(f"pipeline.computeButtonStates({json.dumps(state)})")
+
+    assert result["retryDisabled"] is True
+
+
+def test_build_control_status_message_for_generate():
+    trace = {
+        "event": {
+            "event_id": "SIM-EVT-000001",
+            "event_type": "Order Created",
+            "customer_id": "DEMO-0001",
+            "status": "success",
+        },
+        "replay": False,
+    }
+    message = _run_node(f"pipeline.buildControlStatusMessage('generate', {json.dumps(trace)})")
+
+    assert "Order Created" in message
+    assert "DEMO-0001" in message
+
+
+def test_build_control_status_message_for_failure_names_the_failure_type():
+    trace = {
+        "event": {
+            "event_id": "SIM-EVT-000002",
+            "failure_type": "kafka_timeout",
+            "status": "failed",
+        },
+        "replay": False,
+    }
+    message = _run_node(f"pipeline.buildControlStatusMessage('failure', {json.dumps(trace)})")
+
+    assert "Kafka Timeout" in message
+    assert "SIM-EVT-000002" in message
+
+
+def test_build_control_status_message_for_retry_success_vs_dlq_vs_still_failing():
+    base_event = {
+        "event_id": "SIM-EVT-000003",
+        "failure_type": "consumer_failure",
+        "retry_count": 2,
+    }
+
+    success_message = _run_node(
+        "pipeline.buildControlStatusMessage('retry', "
+        + json.dumps({"event": {**base_event, "status": "success"}, "replay": False})
+        + ")"
+    )
+    dlq_message = _run_node(
+        "pipeline.buildControlStatusMessage('retry', "
+        + json.dumps({"event": {**base_event, "status": "dlq"}, "replay": False})
+        + ")"
+    )
+    still_failing_message = _run_node(
+        "pipeline.buildControlStatusMessage('retry', "
+        + json.dumps({"event": {**base_event, "status": "failed"}, "replay": False})
+        + ")"
+    )
+
+    assert "succeeded" in success_message
+    assert "Dead Letter Queue" in dlq_message
+    assert "failed again" in still_failing_message
+
+
+def test_stage_animation_schedule_lays_out_steps_sequentially():
+    steps = [
+        {"stage": "Producer", "status": "ok"},
+        {"stage": "Kafka Topic", "status": "ok"},
+        {"stage": "Consumer", "status": "failed"},
+    ]
+
+    schedule = _run_node(f"pipeline.stageAnimationSchedule({json.dumps(steps)}, 100)")
+
+    assert [entry["stage"] for entry in schedule] == ["Producer", "Kafka Topic", "Consumer"]
+    assert [entry["startMs"] for entry in schedule] == [0, 100, 200]
+    assert [entry["endMs"] for entry in schedule] == [100, 200, 300]
+    assert schedule[2]["status"] == "failed"
+
+
+def test_stage_animation_schedule_defaults_step_duration():
+    steps = [{"stage": "Producer", "status": "ok"}]
+
+    schedule = _run_node(f"pipeline.stageAnimationSchedule({json.dumps(steps)})")
+
+    assert schedule[0]["endMs"] - schedule[0]["startMs"] == 450

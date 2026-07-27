@@ -146,7 +146,7 @@ def _bucket_rng(now: datetime, bucket_seconds: int, salt: str) -> random.Random:
     return random.Random(f"{salt}:{bucket}")
 
 
-def _status_from_thresholds(
+def status_from_thresholds(
     value: float, *, warning: float, critical: float
 ) -> HealthStatus:
     if value >= critical:
@@ -224,27 +224,27 @@ def build_summary(
         StageMetric(
             "Kafka Topic",
             kafka_topic_count,
-            _status_from_thresholds(kpis.consumer_lag, warning=15, critical=30),
+            status_from_thresholds(kpis.consumer_lag, warning=15, critical=30),
         ),
         StageMetric(
             "Outbox",
             outbox_count,
-            _status_from_thresholds(outbox_count, warning=10, critical=25),
+            status_from_thresholds(outbox_count, warning=10, critical=25),
         ),
         StageMetric(
             "Consumer",
             kpis.successful_events,
-            _status_from_thresholds(kpis.consumer_lag, warning=15, critical=30),
+            status_from_thresholds(kpis.consumer_lag, warning=15, critical=30),
         ),
         StageMetric(
             "Retry Queue",
             kpis.retry_queue,
-            _status_from_thresholds(kpis.retry_queue, warning=10, critical=20),
+            status_from_thresholds(kpis.retry_queue, warning=10, critical=20),
         ),
         StageMetric(
             "Dead Letter Queue",
             kpis.dlq_messages,
-            _status_from_thresholds(kpis.dlq_messages, warning=3, critical=8),
+            status_from_thresholds(kpis.dlq_messages, warning=3, critical=8),
         ),
         StageMetric(
             "PostgreSQL",
@@ -323,8 +323,8 @@ def build_service_health(
             last_heartbeat=moment,
         )
 
-    kafka_status = _status_from_thresholds(kpis.consumer_lag, warning=15, critical=30)
-    outbox_status = _status_from_thresholds(kpis.retry_queue, warning=10, critical=20)
+    kafka_status = status_from_thresholds(kpis.consumer_lag, warning=15, critical=30)
+    outbox_status = status_from_thresholds(kpis.retry_queue, warning=10, critical=20)
 
     return [
         service("API", HealthStatus.HEALTHY, 8.0),

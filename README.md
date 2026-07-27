@@ -117,6 +117,30 @@ python scripts/seed_demo_customers.py --force
 | `GET` | `/demo/api/pipeline/charts` | 6 time-series/categorical series for the charts |
 | `GET` | `/demo/api/pipeline/customer/{customer_id}` | 6-step illustrative event-flow timeline for one customer |
 
+### Pipeline Control Center (v1.2)
+
+The dashboard above is passive — it auto-refreshes but nothing a visitor does changes it. The **Control Center** toolbar on `/demo/pipeline` makes it interactive: **Generate Customer Event**, **Replay Last Event**, **Inject Failure**, **Retry Failed Event**, **Recover Consumer**, **Reset Demo**.
+
+**Why this needed real state, unlike the rest of the page.** Everything above is a pure function of a timestamp — no memory between requests, by design. But "click Generate, then click Retry in a separate request and see the _same_ event" is impossible without something remembering what happened. `customer360/api/pipeline_simulation_engine.py` adds exactly that: one thread-safe, in-memory `PipelineSimulationEngine` singleton — the "single source of truth" the feature calls for. It's shared by every visitor, the same way a real shared ops dashboard would be (see [Limitations](#limitations) for what that means in practice). Nothing in it calls `random`: event types and customers cycle deterministically off a sequence counter, and per-stage processing times are fixed illustrative constants — every method is unit-tested with zero FastAPI/DB dependency.
+
+**How retries actually resolve (no randomness, so this had to be a real rule, not a coin flip):** every failure type is modeled as manifesting through the one recovery lever this engine has — consumer health. Inject any of the 5 failure types and `consumer_healthy` goes false; **Retry** succeeds if and only if it's since gone true again via **Recover Consumer**. Retrying while still unhealthy increments the retry counter and stays failed; hitting `max_retries` (5 — the same default `OutboxEvent.max_retries` already uses) routes it to the DLQ instead. This is exactly the walkthrough in the task's own success criteria: generate → fail → retry (still failing) → DLQ _or_ recover → retry (succeeds).
+
+**Persistence is real when the database is reachable, and never required.** `generate`/`failure`/`retry` mirror their outcome into a genuine `outbox_events` row using the _existing, already-tested_ `OutboxRepository.add()` / `mark_published()` / `increment_retry()` — no outbox business logic was duplicated to build this. That write is strictly best-effort: the in-memory engine is always the actual source of truth, so a database outage degrades to pure in-memory simulation rather than breaking the interactive flow. **Reset Demo** deletes only the specific rows this engine created (tracked by event ID) — it never touches real customer records or any other outbox row.
+
+**The passive dashboard's numbers move too.** `/demo/api/pipeline/summary` and `/services` additively overlay the engine's counters onto the ambient (time-based) values from `pipeline_telemetry.py` — that file was not modified to build this; the overlay lives entirely in `main.py`. At the engine's initial/reset state every delta is 0, so the overlay is a byte-for-byte no-op — confirmed by a regression test that pins the idle-state shape.
+
+New endpoints, same unauthenticated/excluded-from-schema treatment as the rest of `/demo/api/*`, but rate-limited tighter since they do real (if bounded) work — `reset` especially, since it clears state every visitor shares:
+
+| Method | Path | Rate limit | Description |
+| :---: | --- | :---: | --- |
+| `POST` | `/demo/api/pipeline/generate` | 20/min | Generates the next event, delivers it end to end |
+| `POST` | `/demo/api/pipeline/replay` | 30/min | Re-plays the last trace; no new writes |
+| `POST` | `/demo/api/pipeline/failure` | 20/min | Body: `{"failure_type": "consumer_failure" \| "kafka_timeout" \| "database_timeout" \| "serialization_error" \| "validation_failure"}` |
+| `POST` | `/demo/api/pipeline/retry` | 30/min | Retries the current failed event (409 if none) |
+| `POST` | `/demo/api/pipeline/recover` | 20/min | Marks the Consumer healthy again |
+| `POST` | `/demo/api/pipeline/reset` | 6/min | Restores idle state; deletes only this engine's outbox rows |
+| `GET` | `/demo/api/pipeline/state` | 60/min | Current engine state, for syncing button enablement on load |
+
 ### Pipeline Monitor screenshot checklist
 
 <!-- Capture after seeding demo data, then embed alongside the images in the Screenshots section below:
@@ -642,6 +666,7 @@ Being direct about the current gaps:
 - **AWS deployment is not live.** Terraform is validated in CI and Kubernetes manifests are included, but the workflow that would publish a container to AWS is disabled; Railway is the only environment actually running the app.
 - **Single static API key**, not per-client keys, OAuth, or user accounts.
 - **`/demo/pipeline`'s Kafka/consumer/outbox telemetry is simulated, not scraped from a live broker.** It's a direct, honest consequence of the two gaps above (no deployed consumer worker, outbox not wired in) — see [Pipeline Monitor](#pipeline-monitor) for exactly which numbers on that page are real vs. simulated, and why.
+- **The Pipeline Control Center's state is global, not per-visitor.** `PipelineSimulationEngine` is one process-wide singleton — if two people have `/demo/pipeline` open at once, one clicking "Reset Demo" clears what the other is looking at. This is a deliberate reading of the task's own "single source of truth" requirement (matching a real shared ops dashboard), not an oversight; a per-session engine keyed by a cookie/token would be the fix if this ever needs to support concurrent independent demos.
 
 ## Roadmap
 

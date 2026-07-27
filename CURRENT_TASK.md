@@ -1,112 +1,127 @@
 # Current Task
 
-## Task: Build Enterprise Pipeline Monitoring Dashboard (v1.1 follow-on)
+## Task: Customer360 Platform v1.2 — Interactive Pipeline Simulator
 
+**Branch:** `feature/pipeline-simulator-v1.2`
 **Status:** Complete
 **Started / Completed:** 2026-07-27
 
 ### What shipped
 
-A flagship `/demo/pipeline` page (Datadog/Confluent-Cloud-style) that
-demonstrates the platform's Kafka/outbox/retry/DLQ architecture: 8 animated
-KPI cards, an animated 7-stage pipeline visualization, a live-scrolling
-event stream, 6 Chart.js charts, 6 service health cards, and a per-customer
-illustrative event-flow timeline. No existing route, auth, or test changed
+A Control Center toolbar on `/demo/pipeline`: **Generate Customer Event**,
+**Replay Last Event**, **Inject Failure** (5 types), **Retry Failed
+Event**, **Recover Consumer**, **Reset Demo**. Animated stage highlighting
+plays out each action's trace; the passive dashboard's KPIs/stages/service
+cards visibly move as a result. No existing route, test, or auth changed
 behavior — only additions.
 
-### Two decisions made without re-asking (extending the v1.1 `/demo` precedent)
+### Key design decisions
 
-1. **Chart.js vendored locally** — `customer360/api/static/demo/vendor/chart.umd.min.js`
-   (4.5.1, MIT), same pattern as the pre-existing vendored
-   `swagger-ui-bundle.js`/`redoc.standalone.js`. Satisfies "use Chart.js or
-   ECharts" while keeping `script-src 'self'`, no CDN, no `unsafe-eval`.
-2. **Real data stays real; everything with no live backing is a labeled,
-   deterministic simulation**, not random noise and not fabricated. See
-   README → Pipeline Monitor for the exact real/simulated table. In short:
-   real = `PostgreSQL` stage, `Database`/`API` service cards, real
-   `outbox_events` count if any exist, a selected customer's real
-   `created_at`. Simulated = the other 6 stages, `Kafka`/`Consumer`/`Outbox`/
-   `Scheduler` service cards, all 8 KPIs except what's listed above, the
-   event stream, and all 6 charts.
+(See docs/ARCHITECTURE.md and README → Pipeline Control Center for the
+full reasoning.)
+
+1. **New stateful `PipelineSimulationEngine` singleton**, separate from
+   the (deliberately stateless) v1.1 `pipeline_telemetry.py`, which was
+   **not modified**. All 23 of its tests still pass unmodified — the
+   single source of truth for interactive state lives in the new module
+   only, per the task's own requirement.
+2. **Retry resolution is a deterministic rule, not a coin flip**: every
+   failure type maps to one shared recovery lever (`consumer_healthy`).
+   Retry succeeds iff healthy; otherwise it increments toward
+   `MAX_RETRIES = 5` (matches `OutboxEvent.max_retries`'s existing
+   default) before routing to the DLQ. Confirmed against the task's own
+   numbered success criteria (fail → *observe retries* → DLQ → recover →
+   retry succeeds) — the first version of this logic (retry always
+   resolves on the first attempt) didn't match that narrative and was
+   caught by writing the engine's own tests before wiring anything else.
+3. **Persistence is real when possible, never required.** `generate`/
+   `failure`/`retry` mirror outcomes into a real `outbox_events` row via
+   the *existing, unmodified* `OutboxRepository.add()`/`mark_published()`/
+   `increment_retry()` — reused, not reimplemented. One new, minimal
+   repository method was needed: `get_by_event_id()` (each HTTP request
+   gets a fresh session, so the engine can't hold an ORM object across
+   requests) and `delete_by_event_ids()` (for Reset's cleanup, scoped only
+   to this engine's own rows).
+4. **Existing `/demo/api/pipeline/summary` and `/services` responses are
+   additively overlaid** with the engine's deltas inside `main.py` (not
+   inside `pipeline_telemetry.py`). At the engine's idle state every delta
+   is 0 — pinned by a regression test.
+5. **The engine is a global singleton, not per-visitor** — a deliberate
+   reading of "single source of truth," documented as a known limitation
+   (two concurrent visitors share one demo state).
 
 ### Files changed/added
 
-- `customer360/api/pipeline_telemetry.py` — pure, deterministic simulation
-  engine (23 unit tests, no FastAPI/DB/Kafka needed).
-- `customer360/api/main.py` — `/demo/pipeline` + 5 `/demo/api/pipeline/*`
-  routes, a briefly-cached `_real_pipeline_inputs()` helper.
-- `customer360/infrastructure/repository.py` — added `count_all()` and
-  `list_customer_ids()` (efficient, single-purpose queries; avoids
-  over-fetching full rows just to count/sample IDs).
-- `customer360/api/static/demo/pipeline/{index.html,pipeline.css,pipeline.js}`,
-  `customer360/api/static/demo/vendor/chart.umd.min.js` — new.
-- Nav updates: `/demo` header, landing page Live Deployment card + footer
-  link + a new "Pipeline Monitor" feature card.
-- Tests: `tests/api/test_pipeline_telemetry.py` (23),
-  `tests/api/test_pipeline_js.py` (11, Node shell-out), ~28 new tests in
-  `tests/api/test_main.py` (routes/assets/CSP/empty/error/regression), plus
-  2 new repository tests.
-- Docs: README "Pipeline Monitor" section + endpoint table + Limitations/
-  Roadmap/Tech-Stack updates; `docs/ARCHITECTURE.md` new "Demo & Pipeline
-  Monitoring Layer" section; `pyproject.toml` package-data.
+- `customer360/api/pipeline_simulation_engine.py` — new, stateful engine.
+- `customer360/api/main.py` — 6 `POST` + 1 `GET` route, plus
+  `_apply_engine_overlay_to_summary/_services` helpers.
+- `customer360/api/pipeline_telemetry.py` — one pure rename
+  (`_status_from_thresholds` → `status_from_thresholds`, now public so
+  `main.py` can reuse it for the overlay); zero behavior change.
+- `customer360/infrastructure/repository.py` — unchanged this task (already
+  had what was needed from the prior task).
+- `customer360/outbox/repository.py` — added `get_by_event_id()` and
+  `delete_by_event_ids()`.
+- `customer360/api/static/demo/pipeline/{index.html,pipeline.css,pipeline.js}` —
+  Control Center toolbar, stage-highlight animation, button-state syncing.
+- Tests: `tests/api/test_pipeline_simulation_engine.py` (21, zero DB/FastAPI
+  dependency), `tests/outbox/test_outbox_repository.py` (+4), ~30 new tests
+  in `tests/api/test_main.py` (routes, overlay, DB persistence/fallback,
+  regression, with explicit `ENGINE.reset()` isolation), +11 Node tests in
+  `tests/api/test_pipeline_js.py`.
+- Docs: README "Pipeline Control Center" subsection + endpoint table +
+  Limitations; `docs/ARCHITECTURE.md` new section.
 
 ### Verified
 
-- `pytest -q`: **183 passed**, 0 failed, 0 skipped (183 = 124 pre-existing at
-  the start of this task + 59 new: 23 in `test_pipeline_telemetry.py`, 11 in
-  `test_pipeline_js.py`, 22 pipeline-specific in `test_main.py`, 3 in
-  `test_repository.py`).
-- `ruff check .` clean. `mypy customer360` (matches CI) clean, 0 issues
-  across 32 files.
-- Wheel build includes the new pipeline/vendor assets (`unzip -l` verified).
-- `docker build` succeeds; ran the built image against the real local
-  Postgres (via `host.docker.internal`), hit every new endpoint, and
-  confirmed the `PostgreSQL` stage exactly matched the real row count (5).
-- Playwright (headless Chromium) against a live local server at 1440×900
-  and 390×844: zero console errors, zero CSP violations, zero horizontal
-  overflow (after one fix — see below), 7 stage nodes, 6 service cards, 6
-  charts with actually-painted pixels, working customer-flow select, and
-  KPI/count-up values that were non-zero and animated.
-- **One real bug found and fixed during browser verification:** `.panel`
-  (a CSS grid item) had no `min-width: 0`, so the pipeline visualization's
-  internal `overflow-x: auto` scroller wasn't containing its child's
-  `min-width: 760px` — it was widening the whole grid item instead, causing
-  horizontal page overflow on mobile. Fixed in `pipeline.css`. Also added
-  `-webkit-backdrop-filter` for Safari.
-- **One real bug found and fixed during test-writing:** the module-level
-  cache in `_real_pipeline_inputs()` doesn't know about
-  `dependency_overrides`, so tests that swap the DB session need to reset
-  it first (documented and added in `test_main.py`) — this is fine in
-  production (small staleness window is the intended trade-off) but broke
-  test isolation until fixed.
-
-Note on the local dev environment: at the start of this task, `docker-compose`'s
-`postgres`/`kafka` containers had exited (unrelated to any code change —
-they'd stopped since the last session). This caused the *existing* test
-suite to fail before I'd changed anything. Restarted both via
-`docker compose up -d postgres kafka` and re-verified 150 pre-existing tests
-passed clean before adding anything new.
+- `pytest -q`: **238 passed**, 0 failed (238 = 183 at session start + 55
+  new: 21 engine + 4 outbox-repo + ~11 pipeline.js + ~19 test_main.py
+  Control Center tests, roughly — exact split isn't load-bearing, the
+  count that matters is 0 failures).
+- `ruff check .` clean, `mypy customer360` clean (33 source files).
+- Wheel build succeeds, includes the new module.
+- Docker build succeeds; ran the built image against real local Postgres
+  and drove the entire journey via curl (generate → fail → retry-still-
+  failing → recover → retry-succeeds → reset), confirming real
+  `outbox_events` writes and cleanup.
+- Playwright (headless Chromium, 1440×1000 and 390×844): full click-through
+  of the same journey. Zero console errors, zero CSP violations, zero
+  horizontal overflow. Keyboard tab order reaches the toolbar buttons
+  right after the header nav (native `<button>`/`<select>` — free
+  Enter/Space activation and focus-visible outlines).
+- **One real bug found while writing engine tests, before any UI existed**:
+  my first retry design resolved every retry on the first attempt, which
+  contradicted the task's own "observe retries" (plural) → DLQ → recover →
+  retry-succeeds narrative. Rewrote `inject_failure`/`retry_failed_event`
+  around the shared `consumer_healthy` lever instead; all engine tests
+  re-verified against the corrected semantics.
+- **One real bug found via Playwright**: `setControlBusy(false)` was
+  re-enabling buttons using stale `buttonAvailability` for one round-trip,
+  before the async `/state` re-fetch landed — visible as replay/retry
+  briefly showing the *previous* action's enabled/disabled state. Fixed by
+  deriving availability synchronously from the trace already in hand.
+  (Two more apparent failures during manual verification turned out to be
+  bugs in the verification script's wait-conditions, not the app — e.g.
+  waiting for `!retryDisabled` after an action that's *supposed* to
+  disable retry again.)
+- **One flaky test found and fixed**: `test_pipeline_summary_overlay_reflects_engine_deltas`
+  asserted an exact `+1` delta, but the ambient (time-based) half of those
+  KPIs ticks upward on its own between two calls a few ms apart. Changed
+  to `>=` — still meaningful, no longer timing-sensitive.
 
 ### Known limitations
 
-- Everything in the "simulated" column of the Pipeline Monitor README table
-  will keep looking exactly the same until the outbox pattern is wired in
-  and a consumer worker is actually deployed (pre-existing gaps, not
-  introduced or hidden by this task — see Roadmap).
-- Chart.js's 208KB vendored bundle is the single largest static asset added;
-  acceptable for a demo page, but worth knowing if bundle size becomes a
-  concern later.
-- Screenshot files for the new README checklist weren't captured to
-  `docs/images/` (same as the v1.1 task) — left as a checklist.
+- Global (not per-session) engine state — see README → Limitations.
+- Chart/summary/service overlays only ever push toward "busier" or
+  "critical"; they don't yet make the ambient dashboard visibly react in
+  the charts' *historical* series, only the live summary/services values.
+- Screenshot checklist for the Control Center itself wasn't added to
+  `docs/images/` (same standing gap as the two prior tasks).
 
 ### Next task after this one
 
-Wire the same Node-based JS tests (`test_demo_js.py`, `test_pipeline_js.py`)
-into the CI `quality` job in `.github/workflows/tests.yml`, so a frontend
-regression in either dashboard fails CI the same way Ruff/mypy would. Right
-now that coverage only runs via local `pytest` (which already shells out to
-Node) — CI's `ubuntu-latest` runners have Node preinstalled, so this is
-close to a no-op addition, just an explicit step.
+Wire `test_demo_js.py`/`test_pipeline_js.py` into the CI `quality` job (flagged
+after the previous task too, still not done — now covering 3 frontend files).
 
 ---
 
@@ -114,21 +129,27 @@ close to a no-op addition, just an explicit step.
 
 **Tag:** `v1.2.0`
 **Title:** Customer360 Platform v1.2.0
-**Theme:** Enterprise Pipeline Monitoring Dashboard
+**Theme:** Pipeline Monitor + Interactive Pipeline Simulator
 
-> Adds `/demo/pipeline` — a Datadog/Confluent-Cloud-style monitoring
-> dashboard that visualizes the platform's Kafka, outbox-pattern, retry, and
-> dead-letter-queue architecture: 8 animated KPI cards, an animated 7-stage
-> pipeline flow, a live event stream, 6 charts (Chart.js, vendored locally,
-> no CDN), 6 service health cards, and a per-customer event-flow timeline.
+> `/demo/pipeline` is now a full enterprise-monitoring-style dashboard
+> *and* an interactive control center. On top of the v1.1 passive view
+> (8 KPI cards, 7-stage pipeline visualization, live event stream, 6
+> charts, 6 service health cards), visitors can now **Generate a
+> Customer Event**, **Replay** it, **Inject a Failure** (5 types),
+> **Retry**, **Recover the Consumer**, and **Reset** the demo — watching
+> the KPIs, stage colors, and service cards respond in real time.
 >
-> - The `PostgreSQL` stage and the `Database`/`API` service cards are real,
->   sourced from the live database; everything else that has no live Kafka
->   broker or consumer worker to back it is a deterministic, clearly
->   labeled simulation — never random, never presented as production
->   telemetry.
-> - New unauthenticated `/demo/api/pipeline/*` endpoints, reusing the same
->   repository layer as the real API. `/customers`, `/api/v1/*`, and the
->   v1.1 `/demo/api/*` endpoints are unchanged.
-> - No changes to auth, CSP, security headers, Swagger UI, ReDoc, or the
->   OpenAPI schema.
+> - Retry resolution is deterministic (no randomness): every failure
+>   type shares one recovery lever, so retrying while the consumer is
+>   still unhealthy keeps failing toward a fixed retry limit, then routes
+>   to the DLQ; recovering the consumer, then retrying, succeeds.
+> - When the database is reachable, actions mirror a real `outbox_events`
+>   row using the existing, unmodified `OutboxRepository` — reused, not
+>   reimplemented. Never required: the interactive demo works exactly the
+>   same with the database down.
+> - The passive v1.1 dashboard (`pipeline_telemetry.py`) was not modified;
+>   the new engine's counters are additively overlaid in `main.py` only.
+> - No changes to auth, CSP, security headers, Swagger UI, ReDoc, the
+>   OpenAPI schema, or any `/api/v1/*`/`/demo/api/*` endpoint from v1.1.
+> - Known limitation: the Control Center's state is shared globally
+>   across all visitors, not isolated per session.

@@ -29,6 +29,10 @@ class OutboxRepository:
         self.session.refresh(event)
         return event
 
+    def get_by_event_id(self, event_id: str) -> OutboxEvent | None:
+        statement = select(OutboxEvent).where(OutboxEvent.event_id == event_id)
+        return self.session.scalar(statement)
+
     def pending(self) -> list[OutboxEvent]:
         now = datetime.now(UTC).replace(tzinfo=None)
 
@@ -67,3 +71,20 @@ class OutboxRepository:
         event.published_at = datetime.now(UTC).replace(tzinfo=None)
         event.next_retry_at = None
         self.session.commit()
+
+    def delete_by_event_ids(self, event_ids: list[str]) -> int:
+        """Removes specific rows by event_id. Used to clean up rows the
+        pipeline simulator created when the demo is reset -- never touches
+        anything else in this table."""
+
+        if not event_ids:
+            return 0
+
+        statement = select(OutboxEvent).where(OutboxEvent.event_id.in_(event_ids))
+        events = list(self.session.scalars(statement))
+
+        for event in events:
+            self.session.delete(event)
+
+        self.session.commit()
+        return len(events)

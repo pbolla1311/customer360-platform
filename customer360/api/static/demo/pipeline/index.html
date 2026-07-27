@@ -77,6 +77,34 @@
       </article>
     </section>
 
+    <section class="panel control-center-panel" aria-label="Pipeline Control Center">
+      <div class="panel-heading">
+        <h2>Pipeline Control Center</h2>
+        <span class="summary-tag summary-tag--sample">Shared demo state — visible to every visitor</span>
+      </div>
+      <div class="control-toolbar">
+        <button type="button" id="btn-generate" class="control-btn control-btn--primary">Generate Customer Event</button>
+        <button type="button" id="btn-replay" class="control-btn" disabled>Replay Last Event</button>
+        <div class="control-group">
+          <label class="sr-only" for="failure-type-select">Failure type</label>
+          <select id="failure-type-select">
+            <option value="consumer_failure">Consumer Failure</option>
+            <option value="kafka_timeout">Kafka Timeout</option>
+            <option value="database_timeout">Database Timeout</option>
+            <option value="serialization_error">Serialization Error</option>
+            <option value="validation_failure">Validation Failure</option>
+          </select>
+          <button type="button" id="btn-inject-failure" class="control-btn control-btn--danger">Inject Failure</button>
+        </div>
+        <button type="button" id="btn-retry" class="control-btn" disabled>Retry Failed Event</button>
+        <button type="button" id="btn-recover" class="control-btn">Recover Consumer</button>
+        <button type="button" id="btn-reset" class="control-btn control-btn--ghost">Reset Demo</button>
+      </div>
+      <p class="control-status" id="control-status" role="status" aria-live="polite">
+        No event generated yet — click "Generate Customer Event" to start.
+      </p>
+    </section>
+
     <section class="viz-stream-grid">
       <div class="panel pipeline-viz-panel" aria-label="Pipeline flow visualization">
         <div class="panel-heading">
