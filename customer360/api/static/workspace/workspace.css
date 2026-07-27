@@ -1,0 +1,534 @@
+/* Customer360 Cloud workspace shell. Loaded after demo.css and pipeline.css
+   (see index.html) so it can reuse their :root tokens, .panel/.kpi-*/
+   .customer-*/.state-panel/.btn classes without redefining them -- only the
+   shell layout (sidebar/topbar/content) and a handful of workspace-only
+   pieces (edit form, tables, audit list, iframe wrapper) live here. */
+
+body {
+  overflow-x: hidden;
+}
+
+.ws-shell {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-height: 100vh;
+  align-items: stretch;
+}
+
+/* ---------- Sidebar ---------- */
+
+.ws-sidebar {
+  width: 248px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 22px 16px;
+  border-right: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.ws-product-tag {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.ws-product-name {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.ws-product-tagline {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.ws-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ws-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 13.5px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.ws-nav-link:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+}
+
+.ws-nav-link.is-active {
+  background: rgba(34, 211, 238, 0.1);
+  border-color: rgba(34, 211, 238, 0.3);
+  color: var(--accent-cyan);
+}
+
+.ws-sidebar-footer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+.ws-sidebar-footer a {
+  color: var(--text-muted);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.ws-sidebar-footer a:hover {
+  color: var(--accent-cyan);
+}
+
+.ws-version {
+  color: var(--text-dim);
+}
+
+/* ---------- Main / topbar ---------- */
+
+.ws-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 32px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.ws-view-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.ws-live-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ok);
+}
+
+.ws-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.7);
+  animation: ws-live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ws-live-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.ws-content {
+  flex: 1;
+  padding: 28px 32px 60px;
+  max-width: 1400px;
+  width: 100%;
+}
+
+.ws-view.is-hidden {
+  display: none;
+}
+
+/* ---------- Shared layout helpers ---------- */
+
+.ws-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 24px;
+  align-items: start;
+}
+
+.ws-panel-spaced {
+  margin-bottom: 16px;
+}
+
+.ws-panel-link {
+  margin-left: auto;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--accent-cyan);
+  text-decoration: none;
+}
+
+.ws-panel-link:hover {
+  text-decoration: underline;
+}
+
+.ws-panel-note {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+.ws-badge-ok {
+  display: inline-flex;
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.ws-empty-hint {
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+  padding: 18px 0;
+}
+
+/* ---------- Activity / alert lists (Overview, Monitoring) ---------- */
+
+.ws-activity-list,
+.ws-alert-list,
+.ws-audit-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.ws-activity-list li,
+.ws-alert-list li {
+  font-size: 13px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ws-activity-list .ws-item-title,
+.ws-alert-list .ws-item-title {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.ws-activity-list .ws-item-meta,
+.ws-alert-list .ws-item-meta {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.ws-alert-list li.ws-alert--critical {
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+.ws-alert-list li.ws-alert--warning {
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
+/* ---------- Pipeline status mini (Overview) ---------- */
+
+.ws-stage-mini {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ws-stage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ---------- Edit form (Customers) ---------- */
+
+.ws-edit-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 0;
+  margin-bottom: 20px;
+}
+
+.ws-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ws-field label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.ws-input {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-primary);
+  font-size: 14px;
+  padding: 9px 11px;
+}
+
+.ws-input:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+
+.ws-edit-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+  border-color: transparent;
+  color: var(--bg-0);
+}
+
+.ws-edit-status {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ws-edit-status--ok {
+  color: var(--ok);
+}
+
+.ws-edit-status--error {
+  color: var(--critical, #f87171);
+}
+
+/* ---------- Tables (Event Center, Analytics) ---------- */
+
+.ws-table-wrap {
+  overflow-x: auto;
+}
+
+.ws-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.ws-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.ws-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.ws-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ws-status-pill {
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+
+.ws-status-pill--success {
+  color: var(--ok);
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.35);
+}
+
+.ws-status-pill--failed {
+  color: var(--warn, #fbbf24);
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+}
+
+.ws-status-pill--dlq {
+  color: var(--critical, #f87171);
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+}
+
+/* ---------- Audit trail (step-level) ---------- */
+
+.ws-audit-list li {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ws-audit-entry-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.ws-audit-entry-heading .ws-item-title {
+  font-weight: 700;
+  color: var(--text-primary);
+  font-size: 13.5px;
+}
+
+.ws-audit-entry-heading .ws-item-meta {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.ws-audit-steps {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ws-audit-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.ws-audit-step--ok {
+  border-color: rgba(52, 211, 153, 0.35);
+  color: var(--ok);
+}
+
+.ws-audit-step--failed {
+  border-color: rgba(248, 113, 113, 0.4);
+  color: var(--critical, #f87171);
+}
+
+.ws-audit-step--pending {
+  border-color: rgba(251, 191, 36, 0.4);
+  color: var(--warn, #fbbf24);
+}
+
+/* ---------- Iframe embeds (Pipeline, API Explorer) ---------- */
+
+.ws-iframe-wrap {
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  height: calc(100vh - 260px);
+  min-height: 560px;
+}
+
+.ws-iframe-wrap iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: var(--bg-0);
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 1100px) {
+  .ws-two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .ws-shell {
+    flex-direction: column;
+  }
+
+  .ws-sidebar {
+    position: static;
+    width: auto;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .ws-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .ws-sidebar-footer {
+    margin-top: 0;
+    margin-left: auto;
+    flex-direction: row;
+    gap: 12px;
+  }
+
+  .ws-content {
+    padding: 20px 18px 40px;
+  }
+
+  .ws-topbar {
+    padding: 18px 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-live-dot {
+    animation: none;
+  }
+}

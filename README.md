@@ -30,6 +30,7 @@ The API is deployed and publicly reachable on Railway.
 | Resource | URL |
 | --- | --- |
 | Application root | <https://customer360-platform-production.up.railway.app> |
+| Customer360 Cloud Workspace | <https://customer360-platform-production.up.railway.app/workspace> |
 | Swagger UI | <https://customer360-platform-production.up.railway.app/docs> |
 | ReDoc | <https://customer360-platform-production.up.railway.app/redoc> |
 | OpenAPI schema | <https://customer360-platform-production.up.railway.app/openapi.json> |
@@ -38,7 +39,33 @@ The API is deployed and publicly reachable on Railway.
 
 ---
 
+## Customer360 Cloud Workspace
+
+_New in v2.0._ **[`/workspace`](https://customer360-platform-production.up.railway.app/workspace)** is the primary way to experience this platform: a single, sidebar-navigated SaaS-style workspace (Overview, Customers, Event Center, Pipeline, Monitoring, Analytics, Audit Logs, API Explorer, Settings) built entirely on top of the pieces documented below — it adds two new endpoints and reuses everything else.
+
+**The one continuous story it tells:** editing a customer in the Customers view is a real write. Click Save and it:
+
+1. Updates the real `customer360_profiles` row via the existing `Customer360Repository.update()`.
+2. Determines what changed (email / city+state / name) and labels the resulting event `Email Changed`, `Address Changed`, or `Customer Updated` — the same vocabulary the Control Center's simulated events already use.
+3. Calls a new `PipelineSimulationEngine.record_customer_update()` method — same happy-path trace shape as the Control Center's `generate_event()`, but for one specific real customer action, and it best-effort mirrors a real `outbox_events` row exactly the way `generate_event` already does.
+4. That event immediately shows up in **Event Center** (event-level table), **Pipeline** (embedded Control Center — see below), **Monitoring**, **Audit Logs** (full per-stage trace: Producer → Kafka Topic → Outbox → Consumer → PostgreSQL), and the customer's own **Customer Timeline** — all reading one new endpoint, `GET /demo/api/pipeline/history`.
+
+No "Generate Event" button anywhere in the workspace's Customers or Pipeline views — the event already exists, produced by the action that created it, matching a real product rather than a demo.
+
+**How each view is actually built** (see `docs/ARCHITECTURE.md` → Workspace Shell for the full breakdown):
+
+- **Overview / Monitoring / Analytics** — new client-side views over existing `/demo/api/*` and `/demo/api/pipeline/*` JSON endpoints (Analytics' revenue/growth/state/top-customer figures are computed in the browser from the real customer list, the same way `/demo`'s illustrative timeline was always computed client-side).
+- **Pipeline** — a same-origin `<iframe src="/demo/pipeline">`, i.e. the exact existing dashboard, not a rebuild. Parent JS hides that page's own header and "Generate Customer Event" button after load (same-origin `contentDocument` access, wrapped in try/catch so it degrades safely) since the workspace's events already exist by the time you'd want to look at them; Inject Failure/Retry/Replay/Recover/Reset stay untouched as operational tools.
+- **API Explorer** — a same-origin `<iframe src="/docs">`. `/docs` is unchanged and still directly reachable for developers and tooling.
+- **Audit Logs** — the same `/demo/api/pipeline/history` response rendered at step level instead of event level.
+
+**Nothing about `/demo`, `/demo/api/*`, `/demo/pipeline`, or `/demo/api/pipeline/*` changed.** Both keep working exactly as documented below — they're no longer the primary entry point (the landing page's main call to action is now "Open Workspace"), but they're kept live for backward compatibility and are linked from the workspace's own Settings view.
+
+---
+
 ## Demo Dashboard
+
+> **Legacy, still live.** Superseded as the primary experience by the Customers view in [Customer360 Cloud Workspace](#customer360-cloud-workspace) above — kept working unchanged for backward compatibility.
 
 _New in v1.1._ **[`/demo`](https://customer360-platform-production.up.railway.app/demo)** is an interactive, recruiter-facing dashboard on top of the same FastAPI backend and PostgreSQL database as the rest of the platform — search customer profiles, select one, and view its fields, without needing an API key or reading raw JSON.
 
@@ -89,6 +116,8 @@ python scripts/seed_demo_customers.py --force
 ---
 
 ## Pipeline Monitor
+
+> **Also embedded, unchanged, in the Pipeline tab of [Customer360 Cloud Workspace](#customer360-cloud-workspace)** (same-origin `<iframe>`, not a rebuild) — this standalone page still works exactly as documented below.
 
 **[`/demo/pipeline`](https://customer360-platform-production.up.railway.app/demo/pipeline)** is an enterprise-monitoring-style dashboard (think Datadog/Confluent Cloud) built to make the platform's event-driven architecture — Kafka, the outbox pattern, retries, dead-lettering, observability — visible at a glance: 8 animated KPI cards, an animated 7-stage pipeline visualization (Producer → Kafka Topic → Outbox → Consumer → Retry Queue → Dead Letter Queue → PostgreSQL), a live-scrolling event stream, 6 charts (Chart.js, vendored locally — see below), 6 service health cards, and a per-customer illustrative event-flow timeline.
 
@@ -420,10 +449,13 @@ All customer-data endpoints are exposed twice: once unversioned (for the live do
 | `GET` | `/demo/api/pipeline/services` | none | 30/min | Service health cards |
 | `GET` | `/demo/api/pipeline/charts` | none | 30/min | Chart series |
 | `GET` | `/demo/api/pipeline/customer/{customer_id}` | none | 120/min | Per-customer event-flow timeline |
+| `GET` | `/workspace` | none | — | Customer360 Cloud Workspace shell HTML page (see [Customer360 Cloud Workspace](#customer360-cloud-workspace)) |
+| `PATCH` | `/demo/api/customers/{customer_id}` | none | 20/min | Updates a customer's name/email/city/state, records a real outbox event, and returns the resulting event trace |
+| `GET` | `/demo/api/pipeline/history` | none | 60/min | Most-recent-first list of every event (Control Center actions and real customer edits) with its full per-stage trace — backs Event Center, Audit Logs, and the Customers timeline |
 
-The `/demo/api/*` and `/demo/api/pipeline/*` routes are excluded from the OpenAPI schema — they exist to support the `/demo` and `/demo/pipeline` pages, not as part of the documented, versioned product API.
+The `/demo/api/*`, `/demo/api/pipeline/*`, and `/workspace` routes are excluded from the OpenAPI schema — they exist to support the `/demo`, `/demo/pipeline`, and `/workspace` pages, not as part of the documented, versioned product API.
 
-The API is currently **read-only** over HTTP — profile creation/updates happen through the batch ingestion pipeline, not through write endpoints (see [Limitations](#limitations)).
+The authenticated, versioned surface (`/customers`, `/api/v1/customers*`) is still **read-only** — profile creation/updates there happen through the batch ingestion pipeline, not a write endpoint. The one exception is the Customer360 Cloud Workspace's own `PATCH /demo/api/customers/{customer_id}` above, scoped to the same unauthenticated, seeded/fictional demo dataset the rest of `/demo/api/*` already serves (see [Limitations](#limitations)).
 
 ## Data Model
 
@@ -655,7 +687,7 @@ curl -H "X-API-Key: $API_KEY" http://localhost:8000/api/v1/customers
 
 Being direct about the current gaps:
 
-- **The API is read-only.** There are no `POST`/`PUT`/`DELETE` endpoints; writes happen only through the batch pipeline.
+- **The authenticated, versioned API is read-only.** There are no `POST`/`PUT`/`DELETE` endpoints under `/customers`/`/api/v1/*`; writes there happen only through the batch pipeline. The Workspace's `PATCH /demo/api/customers/{customer_id}` is the one write endpoint in the app, deliberately scoped to the same unauthenticated, seeded/fictional demo dataset as the rest of `/demo/api/*` — see [Customer360 Cloud Workspace](#customer360-cloud-workspace).
 - **The outbox pattern is implemented and tested but not wired in.** `OutboxRepository`/`OutboxPublisher` are exercised by their own test suite and have a migrated table, but nothing in the live ingestion path currently writes to or drains that table — the batch loader publishes to Kafka directly.
 - **No standalone Kafka consumer process is deployed.** `CustomerEventConsumer` is implemented and covered by a real broker round-trip integration test, but there's no long-running worker (Kubernetes Deployment, entrypoint script, etc.) that runs it continuously.
 - **Idempotent de-duplication is in-process only.** The consumer's processed-event tracking is an in-memory set; it resets on restart and isn't shared across consumer instances.
@@ -666,14 +698,15 @@ Being direct about the current gaps:
 - **AWS deployment is not live.** Terraform is validated in CI and Kubernetes manifests are included, but the workflow that would publish a container to AWS is disabled; Railway is the only environment actually running the app.
 - **Single static API key**, not per-client keys, OAuth, or user accounts.
 - **`/demo/pipeline`'s Kafka/consumer/outbox telemetry is simulated, not scraped from a live broker.** It's a direct, honest consequence of the two gaps above (no deployed consumer worker, outbox not wired in) — see [Pipeline Monitor](#pipeline-monitor) for exactly which numbers on that page are real vs. simulated, and why.
-- **The Pipeline Control Center's state is global, not per-visitor.** `PipelineSimulationEngine` is one process-wide singleton — if two people have `/demo/pipeline` open at once, one clicking "Reset Demo" clears what the other is looking at. This is a deliberate reading of the task's own "single source of truth" requirement (matching a real shared ops dashboard), not an oversight; a per-session engine keyed by a cookie/token would be the fix if this ever needs to support concurrent independent demos.
+- **The Pipeline Control Center's state is global, not per-visitor.** `PipelineSimulationEngine` is one process-wide singleton — if two people have `/demo/pipeline` (or the Workspace's Pipeline tab) open at once, one clicking "Reset Demo" clears what the other is looking at, and a customer edit one visitor makes shows up in every other visitor's Event Center/Audit Logs too. This is a deliberate reading of the task's own "single source of truth" requirement (matching a real shared ops dashboard), not an oversight; a per-session engine keyed by a cookie/token would be the fix if this ever needs to support concurrent independent demos.
+- **The Workspace's Overview/Monitoring throughput and KPI numbers are still `pipeline_telemetry.py`'s ambient, time-seeded simulation**, same as the standalone Pipeline Monitor — a real customer edit is reflected precisely as its own event/trace/timeline entry, but it doesn't change the ambient messages-processed/throughput baseline those views also show.
 
 ## Roadmap
 
 - Wire the outbox publisher into the batch/write path and run it on a schedule
 - Deploy `CustomerEventConsumer` as a standalone worker with a persisted (not in-memory) idempotency store — this, plus the outbox item above, is what would let `/demo/pipeline` show real Kafka/retry/DLQ telemetry instead of simulated
 - Increment the existing Prometheus metrics from request middleware and expose `/metrics`
-- Add write endpoints (`POST`/`PATCH`) backed by the outbox pattern for at-least-once event delivery
+- Extend the Workspace's write path (`PATCH /demo/api/customers/{customer_id}`) to the authenticated `/api/v1` surface, backed by the outbox pattern for at-least-once event delivery
 - Re-enable the AWS CD workflow and deploy the Terraform-defined infrastructure
 - Build the Streamlit dashboard the `apps/dashboard/` and `docs/ARCHITECTURE.md` already scope out
 - Replace the pandas transformation step with real PySpark, and add the dbt models/Airflow DAGs the project layout reserves space for

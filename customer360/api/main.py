@@ -17,7 +17,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -230,6 +230,26 @@ class InjectFailureRequest(BaseModel):
     failure_type: FailureType
 
 
+class CustomerUpdateRequest(BaseModel):
+    first_name: str | None = Field(default=None, min_length=1, max_length=100)
+    last_name: str | None = Field(default=None, min_length=1, max_length=100)
+    email: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=255,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+    )
+    city: str | None = Field(default=None, min_length=1, max_length=100)
+    state: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class CustomerUpdateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    profile: CustomerProfileResponse
+    trace: EventTraceResponse
+
+
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=[],
@@ -312,6 +332,14 @@ DEMO_PAGE_HTML = (
 
 PIPELINE_PAGE_HTML = (
     (STATIC_DIR / "demo" / "pipeline" / "index.html")
+    .read_text()
+    .replace("{{APP_TITLE}}", API_TITLE)
+    .replace("{{APP_VERSION}}", API_VERSION)
+)
+
+
+WORKSPACE_PAGE_HTML = (
+    (STATIC_DIR / "workspace" / "index.html")
     .read_text()
     .replace("{{APP_TITLE}}", API_TITLE)
     .replace("{{APP_VERSION}}", API_VERSION)
@@ -623,6 +651,11 @@ def get_customer(
         )
 
     return serialize_profile(profile)
+
+
+@app.get("/workspace", include_in_schema=False)
+def workspace() -> HTMLResponse:
+    return HTMLResponse(WORKSPACE_PAGE_HTML)
 
 
 @app.get("/demo", include_in_schema=False)
@@ -1095,6 +1128,99 @@ def pipeline_reset_demo(
 @limiter.limit("60/minute")
 def pipeline_get_state(request: Request) -> PipelineStateResponse:
     return PipelineStateResponse.model_validate(ENGINE.get_state())
+
+
+@app.get(
+    "/demo/api/pipeline/history",
+    response_model=list[EventTraceResponse],
+    include_in_schema=False,
+)
+@limiter.limit("60/minute")
+def pipeline_history(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+) -> list[EventTraceResponse]:
+    return [
+        EventTraceResponse.model_validate(trace)
+        for trace in ENGINE.get_trace_history(limit=limit)
+    ]
+
+
+# ---------------------------------------------------------------------------
+# /workspace -- Customer360 Cloud. A real customer edit here is the one
+# action in this file that mutates real customer data (not just simulation
+# state): it updates the Customer360Profile row, then hands the resulting
+# change off to the same ENGINE the Control Center above uses, so the
+# Workspace's Event Center/Pipeline/Monitoring/Analytics/Audit Logs views
+# all see it without any separate "generate event" step. Kept alongside the
+# other /demo/api/* routes (same unauthenticated, rate-limited, seeded-
+# fictional-data-only surface) rather than /api/v1 -- see docs/ARCHITECTURE.md.
+# ---------------------------------------------------------------------------
+
+
+@app.patch(
+    "/demo/api/customers/{customer_id}",
+    response_model=CustomerUpdateResponse,
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": "Customer not found",
+        },
+    },
+    include_in_schema=False,
+)
+@limiter.limit("20/minute")
+def demo_update_customer(
+    request: Request,
+    body: CustomerUpdateRequest,
+    customer_id: str = Path(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+    session: Session = Depends(get_db_session),
+) -> CustomerUpdateResponse:
+    repository = Customer360Repository(session)
+    profile = repository.get_by_customer_id(customer_id)
+
+    if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Customer not found",
+        )
+
+    email_changed = body.email is not None and body.email != profile.email
+    address_changed = (body.city is not None and body.city != profile.city) or (
+        body.state is not None and body.state != profile.state
+    )
+
+    if body.first_name is not None:
+        profile.first_name = body.first_name
+    if body.last_name is not None:
+        profile.last_name = body.last_name
+    if body.email is not None:
+        profile.email = body.email
+    if body.city is not None:
+        profile.city = body.city
+    if body.state is not None:
+        profile.state = body.state
+
+    updated = repository.update(profile)
+
+    if email_changed:
+        event_type = "Email Changed"
+    elif address_changed:
+        event_type = "Address Changed"
+    else:
+        event_type = "Customer Updated"
+
+    trace = ENGINE.record_customer_update(customer_id, event_type, session=session)
+
+    return CustomerUpdateResponse(
+        profile=CustomerProfileResponse.model_validate(updated),
+        trace=EventTraceResponse.model_validate(trace),
+    )
 
 
 app.include_router(v1)

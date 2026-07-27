@@ -282,3 +282,75 @@ def test_get_state_counts_are_consistent_across_a_mixed_history(
     assert state.success_count + state.failed_count == state.generated_count
     assert state.retry_queue_count <= state.failed_count
     assert state.dlq_count <= state.failed_count
+
+
+def test_record_customer_update_follows_the_happy_path(engine: PipelineSimulationEngine):
+    trace = engine.record_customer_update("CUST-0001", "Address Changed")
+
+    assert trace.event.status == EventStatus.SUCCESS
+    assert trace.event.customer_id == "CUST-0001"
+    assert trace.event.event_type == "Address Changed"
+    assert [step.stage for step in trace.steps] == list(HAPPY_PATH)
+    assert all(step.status == StepStatus.OK for step in trace.steps)
+    assert trace.replay is False
+
+
+def test_record_customer_update_becomes_the_current_event(engine: PipelineSimulationEngine):
+    trace = engine.record_customer_update("CUST-0001", "Email Changed")
+
+    state = engine.get_state()
+    assert state.current_event is not None
+    assert state.current_event.event_id == trace.event.event_id
+    assert state.generated_count == 1
+    assert state.success_count == 1
+
+
+def test_record_customer_update_event_ids_are_unique_and_increasing(
+    engine: PipelineSimulationEngine,
+):
+    first = engine.record_customer_update("CUST-0001", "Customer Updated")
+    second = engine.record_customer_update("CUST-0002", "Email Changed")
+
+    assert first.event.event_id != second.event.event_id
+
+
+def test_get_trace_history_is_empty_for_a_fresh_engine(engine: PipelineSimulationEngine):
+    assert engine.get_trace_history() == []
+
+
+def test_get_trace_history_orders_most_recent_first(engine: PipelineSimulationEngine):
+    first = engine.generate_event()
+    second = engine.record_customer_update("CUST-0001", "Customer Updated")
+
+    history = engine.get_trace_history()
+
+    assert [entry.event.event_id for entry in history] == [
+        second.event.event_id,
+        first.event.event_id,
+    ]
+
+
+def test_get_trace_history_reflects_in_place_mutations(engine: PipelineSimulationEngine):
+    engine.generate_event()
+    failed_trace = engine.inject_failure(FailureType.CONSUMER_FAILURE)
+
+    history = engine.get_trace_history()
+
+    assert history[0].event.event_id == failed_trace.event.event_id
+    assert history[0].event.status == EventStatus.FAILED
+
+
+def test_get_trace_history_respects_limit(engine: PipelineSimulationEngine):
+    for _ in range(5):
+        engine.generate_event()
+
+    assert len(engine.get_trace_history(limit=2)) == 2
+
+
+def test_reset_clears_trace_history(engine: PipelineSimulationEngine):
+    engine.generate_event()
+    engine.record_customer_update("CUST-0001", "Customer Updated")
+
+    engine.reset()
+
+    assert engine.get_trace_history() == []

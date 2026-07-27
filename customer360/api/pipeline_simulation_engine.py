@@ -185,6 +185,7 @@ class PipelineSimulationEngine:
         self._current_event: SimulatedEvent | None = None
         self._last_trace: EventTrace | None = None
         self._history: list[SimulatedEvent] = []
+        self._trace_history: list[EventTrace] = []
         self._consumer_healthy = True
         self._demo_outbox_event_ids: list[str] = []
 
@@ -193,6 +194,14 @@ class PipelineSimulationEngine:
     def get_state(self) -> PipelineState:
         with self._lock:
             return self._state_locked()
+
+    def get_trace_history(self, limit: int = 50) -> list[EventTrace]:
+        """Most-recent-first traces (event + per-stage steps). Backs the
+        Event Center and Audit Logs views -- both read the same underlying
+        history, just render it differently (event-level vs. step-level)."""
+
+        with self._lock:
+            return list(reversed(self._trace_history[-limit:]))
 
     def _state_locked(self) -> PipelineState:
         return PipelineState(
@@ -243,6 +252,9 @@ class PipelineSimulationEngine:
         self._history.append(event)
         if len(self._history) > HISTORY_LIMIT:
             self._history.pop(0)
+        self._trace_history.append(trace)
+        if len(self._trace_history) > HISTORY_LIMIT:
+            self._trace_history.pop(0)
         self._last_trace = trace
 
         return trace
@@ -285,6 +297,8 @@ class PipelineSimulationEngine:
 
             self._current_event = updated_event
             self._history[-1] = updated_event
+            if self._trace_history:
+                self._trace_history[-1] = trace
             self._last_trace = trace
             self._consumer_healthy = False
 
@@ -322,6 +336,8 @@ class PipelineSimulationEngine:
 
             self._current_event = updated_event
             self._history[-1] = updated_event
+            if self._trace_history:
+                self._trace_history[-1] = trace
             self._last_trace = trace
 
         self._persist_retry(session, updated_event)
@@ -339,6 +355,7 @@ class PipelineSimulationEngine:
             self._current_event = None
             self._last_trace = None
             self._history = []
+            self._trace_history = []
             self._consumer_healthy = True
             self._demo_outbox_event_ids = []
             state = self._state_locked()
@@ -350,6 +367,45 @@ class PipelineSimulationEngine:
                 session.rollback()
 
         return state
+
+    def record_customer_update(
+        self,
+        customer_id: str,
+        event_type: str,
+        session: Session | None = None,
+    ) -> EventTrace:
+        """Called when a real customer edit is saved. Unlike generate_event
+        (which cycles through EVENT_TYPES/synthetic customer ids for the
+        Control Center demo button), this always represents one specific,
+        already-happened customer action -- so it always takes the happy
+        path (no injected failures; failures stay an explicit Control
+        Center action) and never fabricates a customer_id or event_type."""
+
+        with self._lock:
+            self._sequence += 1
+            seq = self._sequence
+            now = datetime.now(UTC)
+
+            event = SimulatedEvent(
+                event_id=f"EVT-{seq:06d}",
+                event_type=event_type,
+                customer_id=customer_id,
+                created_at=now,
+                status=EventStatus.SUCCESS,
+            )
+            trace = EventTrace(event=event, steps=_happy_path_steps(now))
+
+            self._current_event = event
+            self._history.append(event)
+            if len(self._history) > HISTORY_LIMIT:
+                self._history.pop(0)
+            self._trace_history.append(trace)
+            if len(self._trace_history) > HISTORY_LIMIT:
+                self._trace_history.pop(0)
+            self._last_trace = trace
+
+        self._persist_generated(session, event)
+        return trace
 
     # -- best-effort persistence -----------------------------------------
     #

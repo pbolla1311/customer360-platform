@@ -1,5 +1,145 @@
 # Current Task
 
+## Task: Customer360 Cloud v2.0 — Workspace Transformation
+
+**Branch:** `feature/customer360-cloud-v2` (created from `feature/pipeline-simulator-v1.2`)
+**Status:** Complete
+**Started / Completed:** 2026-07-27
+
+### What shipped
+
+A new `/workspace` shell — "Customer360 Cloud" — a single, sidebar-navigated
+SaaS-style workspace (Overview, Customers, Event Center, Pipeline,
+Monitoring, Analytics, Audit Logs, API Explorer, Settings) that tells one
+continuous story: editing a customer creates a real database update and a
+real outbox event that flows live through Event Center, Pipeline,
+Monitoring, Analytics, and Audit Logs — no manual "Generate Event" button
+anywhere in the workspace. `/demo`, `/demo/pipeline`, and every
+`/demo/api/*` route are byte-for-byte unchanged and still work standalone;
+the landing page's primary CTA now points at `/workspace` instead.
+
+### Key design decisions
+
+(See docs/ARCHITECTURE.md → "Workspace Shell (Customer360 Cloud, v2.0)"
+and README → "Customer360 Cloud Workspace" for the full reasoning.)
+
+1. **Two new backend routes, two new engine methods, one new internal
+   list — everything else reused.** `PATCH /demo/api/customers/{id}`
+   (updates the real `Customer360Profile` row via the existing
+   `Customer360Repository.update()`, diffs which field changed, and calls
+   new `PipelineSimulationEngine.record_customer_update()`) and
+   `GET /demo/api/pipeline/history` (new `ENGINE.get_trace_history()`,
+   backed by a new `_trace_history` list kept in sync everywhere
+   `_history` already was). No existing endpoint, repository method, or
+   `pipeline_telemetry.py` function changed.
+2. **Real edits always take the happy path.** `record_customer_update`
+   deliberately never fabricates a failure — Inject Failure stays the only
+   way to see a failure/retry/DLQ scenario, keeping "a customer edit
+   creates a real, successful event" honest.
+3. **Pipeline and API Explorer are literal reuse, not rebuilds**: same-origin
+   `<iframe src="/demo/pipeline">` / `<iframe src="/docs">`. Parent JS
+   reaches into the Pipeline iframe's same-origin `contentDocument` after
+   load to hide its own header and the "Generate Customer Event" button
+   only (real edits already produce events) — wrapped in try/catch so a
+   future structural change to `pipeline/index.html` degrades to "show the
+   full page" instead of breaking. Zero changes to `pipeline/index.html`,
+   `pipeline.js`, `pipeline.css`, or `/docs`.
+4. **Audit Logs and Event Center are the same data, rendered differently.**
+   Both read `GET /demo/api/pipeline/history`; Event Center shows one row
+   per event, Audit Logs expands each event's full per-stage trace
+   (Producer → Kafka Topic → Outbox → Consumer → PostgreSQL). No separate
+   audit-logging table or subsystem was built.
+5. **Overview/Analytics need zero new backend.** Revenue, growth-by-week,
+   customers-by-state, and top-customers are all computed client-side in
+   `workspace-analytics.js` from the existing `/demo/api/customers` list —
+   same convention `demo.js` already used for its illustrative timeline.
+6. **Customer edit scope: Name/Email/City/State only** (confirmed with the
+   user) — the fields that actually exist on `Customer360Profile`. No
+   migration, no new columns; Phone/Address/Status from the original spec
+   were explicitly descoped rather than inventing schema.
+7. **New `PATCH` endpoint stays unauthenticated**, matching the existing
+   `/demo/api/*` precedent (which already has mutating `POST` routes) —
+   scoped to the same seeded/fictional demo dataset, rate-limited at
+   20/min.
+
+### Files changed/added
+
+- `customer360/api/pipeline_simulation_engine.py` — `_trace_history` list,
+  `get_trace_history()`, `record_customer_update()`.
+- `customer360/api/main.py` — `CustomerUpdateRequest`/`CustomerUpdateResponse`
+  models, `PATCH /demo/api/customers/{id}`, `GET /demo/api/pipeline/history`,
+  `WORKSPACE_PAGE_HTML` + `GET /workspace`.
+- `customer360/api/static/workspace/` — new: `index.html`, `workspace.css`,
+  `workspace.js` (shell/router/Overview/Settings), `workspace-customers.js`
+  (Customers view), `workspace-pipeline.js` (Event Center/Pipeline/
+  Monitoring/Audit Logs), `workspace-analytics.js` (Analytics).
+- `customer360/api/static/site/{index.html,styles.css}` — CTA now "Open
+  Workspace" → `/workspace`; demo grid gains a Workspace card and marks the
+  Demo Dashboard/Pipeline Monitor cards "Legacy"; footer gains a Workspace
+  link.
+- Tests: `tests/api/test_pipeline_simulation_engine.py` (+8),
+  `tests/api/test_main.py` (+10 `/workspace` page tests, +4
+  `/demo/api/pipeline/history` tests, +11 `PATCH .../customers/{id}` tests,
+  2 landing-page assertions updated for the new CTA/card count),
+  `tests/api/test_workspace_js.py`, `test_workspace_customers_js.py`,
+  `test_workspace_pipeline_js.py`, `test_workspace_analytics_js.py` (35
+  Node tests total, same `require()`-under-Node harness as `test_demo_js.py`).
+- Docs: `docs/ARCHITECTURE.md` new "Workspace Shell" section; README new
+  "Customer360 Cloud Workspace" section, legacy notes on Demo
+  Dashboard/Pipeline Monitor, updated API Endpoints table, Limitations,
+  and Roadmap.
+
+### Verified
+
+- `pytest -q`: **306 passed**, 0 failed (261 Python + 35 Node/JS; 253 at
+  session start + 53 new Python tests, minus/plus adjustments for the 2
+  updated landing-page assertions).
+- `ruff check .` clean, `mypy customer360` clean (33 source files).
+- `node --check` on all 4 new workspace `*.js` files; manual `require()`
+  smoke test confirmed every exported pure function resolves.
+- CSP compliance manually verified on `/workspace`'s rendered HTML: zero
+  inline `<script>`/`<style>` tags, zero `style="..."` attributes — same
+  regex checks the existing `/demo`/`/demo/pipeline` tests already use,
+  plus dedicated new tests for `/workspace`.
+- `markdownlint-cli2` on `README.md`/`docs/ARCHITECTURE.md`: no new
+  MD051 (broken link fragment) issues — caught and fixed one during review
+  (see "One real bug found" below); the 14 remaining MD049 issues are
+  pre-existing and unrelated to this change (confirmed via `git stash`).
+- **One real bug found and fixed before shipping**: `workspace.js`'s
+  `formatCurrency` computed cents from the *unrounded* value passed through
+  `formatThousands` (which itself rounds), so `formatCurrency(1234.5)`
+  produced `"$1,235.50"` instead of `"$1,234.50"`. Caught via a manual
+  Node smoke test before writing the formal test suite; fixed by flooring
+  the whole-unit part before formatting, with an added carry-over case for
+  cent-rounding spilling into the next whole unit (e.g. `999.995` →
+  `"$1,000.00"`), both now pinned by `test_workspace_js.py`.
+- **One real doc bug found and fixed**: changing the "Demo Dashboard"
+  section heading to include a "(legacy)" suffix silently changed its
+  GitHub anchor slug and broke three existing `#demo-dashboard` links
+  elsewhere in the README (caught by the IDE's markdownlint diagnostics,
+  confirmed with `markdownlint-cli2`). Fixed by keeping headings
+  (`## Demo Dashboard`, `## Pipeline Monitor`) unchanged and moving the
+  "legacy" callout into a blockquote in the body instead.
+
+### Known limitations
+
+- Same global-engine caveat as v1.2, now also visible in the Workspace:
+  `PipelineSimulationEngine` is one process-wide singleton, so one
+  visitor's customer edit or "Reset Demo" is visible to every other
+  visitor's Event Center/Audit Logs/Pipeline tab too.
+- The Workspace's Overview/Monitoring throughput and KPI baselines are
+  still `pipeline_telemetry.py`'s ambient, time-seeded simulation — a real
+  customer edit is reflected precisely as its own event/trace/timeline
+  entry, but doesn't move the ambient messages-processed/throughput
+  numbers those views also show.
+- No screenshot checklist added for `/workspace` (same standing gap noted
+  for the two prior tasks' pages).
+- `tests/api/test_demo_js.py`/`test_pipeline_js.py`/the four new
+  `test_workspace_*_js.py` files still aren't wired into the CI `quality`
+  job — flagged after the v1.1 and v1.2 tasks too, still not done.
+
+---
+
 ## Task: Customer360 Platform v1.2 — Interactive Pipeline Simulator
 
 **Branch:** `feature/pipeline-simulator-v1.2`
