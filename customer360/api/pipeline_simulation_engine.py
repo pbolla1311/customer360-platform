@@ -118,10 +118,24 @@ class SimulatedEvent:
 
 
 @dataclass(frozen=True)
+class AuditEntry:
+    """Who/what/before/after for one real customer edit. Only ever attached
+    to a trace produced by record_customer_update() -- Control Center demo
+    actions (generate/inject_failure/retry) have no "before" state to diff
+    against, so their traces simply carry audit=None."""
+
+    actor: str
+    changes: list[str]
+    before: dict[str, object]
+    after: dict[str, object]
+
+
+@dataclass(frozen=True)
 class EventTrace:
     event: SimulatedEvent
     steps: list[TraceStep]
     replay: bool = False
+    audit: AuditEntry | None = None
 
 
 @dataclass(frozen=True)
@@ -373,13 +387,17 @@ class PipelineSimulationEngine:
         customer_id: str,
         event_type: str,
         session: Session | None = None,
+        audit: AuditEntry | None = None,
     ) -> EventTrace:
         """Called when a real customer edit is saved. Unlike generate_event
         (which cycles through EVENT_TYPES/synthetic customer ids for the
         Control Center demo button), this always represents one specific,
         already-happened customer action -- so it always takes the happy
         path (no injected failures; failures stay an explicit Control
-        Center action) and never fabricates a customer_id or event_type."""
+        Center action) and never fabricates a customer_id or event_type.
+        `audit`, when supplied by the caller (see main.py), is attached to
+        the trace as-is -- this engine never computes the before/after
+        diff itself, since it has no notion of "customer fields"."""
 
         with self._lock:
             self._sequence += 1
@@ -393,7 +411,7 @@ class PipelineSimulationEngine:
                 created_at=now,
                 status=EventStatus.SUCCESS,
             )
-            trace = EventTrace(event=event, steps=_happy_path_steps(now))
+            trace = EventTrace(event=event, steps=_happy_path_steps(now), audit=audit)
 
             self._current_event = event
             self._history.append(event)

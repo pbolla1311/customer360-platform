@@ -45,7 +45,26 @@
   <div class="ws-main">
     <header class="ws-topbar">
       <h1 class="ws-view-title" id="ws-view-title">Overview</h1>
+
+      <div class="ws-topbar-search">
+        <label class="sr-only" for="ws-global-search">Search customers, events, and audit logs</label>
+        <input id="ws-global-search" type="search" placeholder="Search customers, events, audit&hellip;" autocomplete="off" spellcheck="false"/>
+        <div class="ws-search-results is-hidden" id="ws-search-results" role="listbox" aria-label="Search results"></div>
+      </div>
+
       <div class="ws-topbar-actions">
+        <div class="ws-notif-wrap">
+          <button type="button" class="ws-notif-bell" id="ws-notif-bell" aria-haspopup="true" aria-expanded="false" aria-label="Notifications">
+            <span aria-hidden="true">&#128276;</span>
+            <span class="ws-notif-badge is-hidden" id="ws-notif-badge">0</span>
+          </button>
+          <div class="ws-notif-dropdown is-hidden" id="ws-notif-dropdown" aria-label="Notifications list">
+            <div class="ws-notif-heading">Notifications</div>
+            <ul class="ws-activity-list" id="ws-notif-list">
+              <li class="ws-empty-hint">No notifications yet.</li>
+            </ul>
+          </div>
+        </div>
         <span class="ws-live-indicator" id="ws-live-indicator" role="status">
           <span class="ws-live-dot" aria-hidden="true"></span>
           Live workspace
@@ -130,6 +149,38 @@
             </ol>
           </div>
         </div>
+
+        <div class="ws-two-col">
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>Customer Growth</h2>
+              <a class="ws-panel-link" href="#/analytics">View Analytics &rarr;</a>
+            </div>
+            <canvas id="ov-chart-growth" height="120"></canvas>
+          </div>
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>Quick Actions</h2>
+            </div>
+            <div class="ws-quick-actions">
+              <a class="btn btn-secondary" href="#/customers">Manage Customers</a>
+              <a class="btn btn-secondary" href="#/pipeline">View Pipeline</a>
+              <a class="btn btn-secondary" href="#/audit">View Audit Logs</a>
+              <button type="button" class="btn btn-secondary" id="ov-quick-reset">Reset Simulation Data</button>
+            </div>
+            <span class="ws-edit-status" id="ov-quick-reset-status" role="status" aria-live="polite"></span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-heading">
+            <h2>Upcoming Tasks</h2>
+            <span class="summary-tag summary-tag--derived">Derived from current pipeline &amp; customer state</span>
+          </div>
+          <ol class="ws-activity-list" id="ov-upcoming-tasks">
+            <li class="ws-empty-hint">Loading&hellip;</li>
+          </ol>
+        </div>
       </section>
 
       <!-- ============ Customers ============ -->
@@ -142,9 +193,24 @@
               <button id="ws-search-clear" type="button" aria-label="Clear search">Clear</button>
             </div>
 
+            <div class="ws-filter-row">
+              <label class="sr-only" for="ws-status-filter">Filter by status</label>
+              <select id="ws-status-filter" class="ws-select">
+                <option value="all">All statuses</option>
+                <option value="active">Active only</option>
+                <option value="archived">Archived only</option>
+              </select>
+            </div>
+
             <p class="list-hint" id="ws-list-hint">Loading customer profiles&hellip;</p>
 
             <ul class="customer-list" id="ws-customer-list" role="listbox" aria-label="Customer results" tabindex="0"></ul>
+
+            <div class="ws-pagination is-hidden" id="ws-pagination">
+              <button type="button" class="btn btn-secondary" id="ws-page-prev">&larr; Prev</button>
+              <span id="ws-page-indicator">Page 1 of 1</span>
+              <button type="button" class="btn btn-secondary" id="ws-page-next">Next &rarr;</button>
+            </div>
 
             <div class="state-panel is-hidden" id="ws-state-loading" role="status">
               <div class="spinner" aria-hidden="true"></div>
@@ -176,40 +242,63 @@
               <header class="profile-header">
                 <h2 id="ws-profile-name"></h2>
                 <span class="profile-status" id="ws-profile-status"></span>
+                <span class="ws-score-badge" id="ws-profile-score"></span>
               </header>
 
-              <dl class="profile-fields" id="ws-profile-fields"></dl>
+              <div class="ws-tag-list" id="ws-profile-tags"></div>
 
-              <form class="ws-edit-form" id="ws-edit-form">
-                <div class="ws-field">
-                  <label for="ws-edit-first-name">First name</label>
-                  <input class="ws-input" id="ws-edit-first-name" name="first_name" maxlength="100" required/>
-                </div>
-                <div class="ws-field">
-                  <label for="ws-edit-last-name">Last name</label>
-                  <input class="ws-input" id="ws-edit-last-name" name="last_name" maxlength="100" required/>
-                </div>
-                <div class="ws-field">
-                  <label for="ws-edit-email">Email</label>
-                  <input class="ws-input" id="ws-edit-email" name="email" type="email" maxlength="255" required/>
-                </div>
-                <div class="ws-field">
-                  <label for="ws-edit-city">City</label>
-                  <input class="ws-input" id="ws-edit-city" name="city" maxlength="100" required/>
-                </div>
-                <div class="ws-field">
-                  <label for="ws-edit-state">State</label>
-                  <input class="ws-input" id="ws-edit-state" name="state" maxlength="100" required/>
-                </div>
-                <div class="ws-edit-actions">
-                  <button type="submit" class="btn btn-primary" id="ws-edit-save">Save</button>
-                  <span class="ws-edit-status" id="ws-edit-status" role="status" aria-live="polite"></span>
-                </div>
-              </form>
+              <div class="ws-tabs" role="tablist" aria-label="Customer profile sections">
+                <button type="button" class="ws-tab is-active" data-tab="overview" role="tab" aria-selected="true">Overview</button>
+                <button type="button" class="ws-tab" data-tab="timeline" role="tab" aria-selected="false">Timeline &amp; Activity</button>
+                <button type="button" class="ws-tab" data-tab="orders" role="tab" aria-selected="false">Orders</button>
+                <button type="button" class="ws-tab" data-tab="events" role="tab" aria-selected="false">Events</button>
+                <button type="button" class="ws-tab" data-tab="audit" role="tab" aria-selected="false">Audit</button>
+                <button type="button" class="ws-tab" data-tab="trace" role="tab" aria-selected="false">Pipeline Trace</button>
+              </div>
 
-              <div class="activity-panel">
+              <div class="ws-tab-panel" data-tab-panel="overview">
+                <dl class="profile-fields" id="ws-profile-fields"></dl>
+
+                <div class="ws-archive-actions">
+                  <button type="button" class="btn btn-secondary" id="ws-archive-toggle">Archive Customer</button>
+                  <span class="ws-edit-status" id="ws-archive-status" role="status" aria-live="polite"></span>
+                </div>
+
+                <form class="ws-edit-form" id="ws-edit-form">
+                  <div class="ws-field">
+                    <label for="ws-edit-first-name">First name</label>
+                    <input class="ws-input" id="ws-edit-first-name" name="first_name" maxlength="100" required/>
+                  </div>
+                  <div class="ws-field">
+                    <label for="ws-edit-last-name">Last name</label>
+                    <input class="ws-input" id="ws-edit-last-name" name="last_name" maxlength="100" required/>
+                  </div>
+                  <div class="ws-field">
+                    <label for="ws-edit-email">Email</label>
+                    <input class="ws-input" id="ws-edit-email" name="email" type="email" maxlength="255" required/>
+                  </div>
+                  <div class="ws-field">
+                    <label for="ws-edit-city">City</label>
+                    <input class="ws-input" id="ws-edit-city" name="city" maxlength="100" required/>
+                  </div>
+                  <div class="ws-field">
+                    <label for="ws-edit-state">State</label>
+                    <input class="ws-input" id="ws-edit-state" name="state" maxlength="100" required/>
+                  </div>
+                  <div class="ws-field">
+                    <label for="ws-edit-tags">Tags (comma-separated)</label>
+                    <input class="ws-input" id="ws-edit-tags" name="tags" maxlength="400"/>
+                  </div>
+                  <div class="ws-edit-actions">
+                    <button type="submit" class="btn btn-primary" id="ws-edit-save">Save</button>
+                    <span class="ws-edit-status" id="ws-edit-status" role="status" aria-live="polite"></span>
+                  </div>
+                </form>
+              </div>
+
+              <div class="ws-tab-panel is-hidden" data-tab-panel="timeline">
                 <div class="activity-heading">
-                  <h3>Customer Timeline</h3>
+                  <h3>Customer Timeline &amp; Activity</h3>
                   <span class="summary-tag summary-tag--live">Real events from this workspace</span>
                 </div>
                 <p class="activity-caption">
@@ -218,6 +307,44 @@
                 <ol class="activity-list" id="ws-profile-timeline">
                   <li class="ws-empty-hint">No recorded events yet for this customer.</li>
                 </ol>
+              </div>
+
+              <div class="ws-tab-panel is-hidden" data-tab-panel="orders">
+                <p class="ws-panel-note">
+                  Aggregate order metrics -- this schema stores rolled-up totals per customer, not a per-order ledger, so there are no individual order rows to list.
+                </p>
+                <dl class="profile-fields" id="ws-profile-orders"></dl>
+              </div>
+
+              <div class="ws-tab-panel is-hidden" data-tab-panel="events">
+                <div class="ws-table-wrap">
+                  <table class="ws-table" id="ws-profile-events-table">
+                    <thead>
+                      <tr>
+                        <th>Event Type</th>
+                        <th>Status</th>
+                        <th>Stage</th>
+                        <th>Retry Count</th>
+                        <th>Correlation ID</th>
+                        <th>Timestamp</th>
+                      </tr>
+                    </thead>
+                    <tbody id="ws-profile-events-body">
+                      <tr><td colspan="6" class="ws-empty-hint">No events yet for this customer.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="ws-tab-panel is-hidden" data-tab-panel="audit">
+                <ol class="ws-audit-list" id="ws-profile-audit-list">
+                  <li class="ws-empty-hint">No audited changes yet for this customer.</li>
+                </ol>
+              </div>
+
+              <div class="ws-tab-panel is-hidden" data-tab-panel="trace">
+                <p class="ws-panel-note" id="ws-profile-trace-caption">No events yet for this customer.</p>
+                <ol class="ws-audit-steps" id="ws-profile-trace-steps"></ol>
               </div>
             </article>
           </div>
@@ -241,11 +368,12 @@
                   <th>Pipeline Stage</th>
                   <th>Retry Count</th>
                   <th>Processing Time</th>
+                  <th>Correlation ID</th>
                   <th>Timestamp</th>
                 </tr>
               </thead>
               <tbody id="ws-event-table-body">
-                <tr><td colspan="7" class="ws-empty-hint">Loading events&hellip;</td></tr>
+                <tr><td colspan="8" class="ws-empty-hint">Loading events&hellip;</td></tr>
               </tbody>
             </table>
           </div>
@@ -263,6 +391,9 @@
             This is the same Pipeline Monitor engine used across the platform, embedded here.
             Real customer edits already appear as events -- use these controls to inject/recover/retry/replay/reset simulated failure scenarios for demo purposes.
           </p>
+          <div class="ws-stage-mini" id="pipe-current-strip">
+            <span class="ws-stage-chip">No current event yet.</span>
+          </div>
         </div>
         <div class="ws-iframe-wrap">
           <iframe id="ws-pipeline-frame" src="/demo/pipeline" title="Pipeline Monitor" loading="lazy"></iframe>
@@ -278,6 +409,11 @@
           <article class="kpi-card"><span class="kpi-label">Consumer Lag</span><span class="kpi-value" id="mon-kpi-lag" data-value="0">0</span></article>
           <article class="kpi-card"><span class="kpi-label">Avg Latency</span><span class="kpi-value" id="mon-kpi-latency" data-value="0">0</span><span class="kpi-unit">ms</span></article>
           <article class="kpi-card"><span class="kpi-label">Throughput</span><span class="kpi-value" id="mon-kpi-throughput" data-value="0">0</span><span class="kpi-unit">events/sec</span></article>
+          <article class="kpi-card">
+            <span class="kpi-label">Service Uptime</span>
+            <span class="kpi-value" id="mon-kpi-uptime" data-value="0">0</span><span class="kpi-unit">%</span>
+            <span class="summary-tag summary-tag--derived">Instant snapshot</span>
+          </article>
         </div>
 
         <div class="ws-two-col">
@@ -294,6 +430,19 @@
             <ul class="ws-alert-list" id="mon-alerts">
               <li class="ws-empty-hint">Loading alerts&hellip;</li>
             </ul>
+          </div>
+        </div>
+
+        <div class="charts-grid ws-panel-spaced">
+          <div class="panel chart-panel">
+            <h3>Latency Trend</h3>
+            <span class="summary-tag summary-tag--sample">Simulated</span>
+            <canvas id="mon-chart-latency" height="180"></canvas>
+          </div>
+          <div class="panel chart-panel">
+            <h3>Retry Queue &amp; DLQ Trend</h3>
+            <span class="summary-tag summary-tag--sample">Simulated</span>
+            <canvas id="mon-chart-retry-dlq" height="180"></canvas>
           </div>
         </div>
 
@@ -315,6 +464,13 @@
           <article class="kpi-card"><span class="kpi-label">Total Transactions</span><span class="kpi-value" id="an-kpi-transactions" data-value="0">0</span><span class="summary-tag summary-tag--live">Live</span></article>
           <article class="kpi-card"><span class="kpi-label">Avg Order Value</span><span class="kpi-value" id="an-kpi-aov" data-value="0">$0</span><span class="summary-tag summary-tag--derived">Derived</span></article>
           <article class="kpi-card"><span class="kpi-label">Customers</span><span class="kpi-value" id="an-kpi-customers" data-value="0">0</span><span class="summary-tag summary-tag--live">Live</span></article>
+          <article class="kpi-card"><span class="kpi-label">Avg Customer Lifetime Value</span><span class="kpi-value" id="an-kpi-clv" data-value="0">$0</span><span class="summary-tag summary-tag--derived">Derived</span></article>
+          <article class="kpi-card"><span class="kpi-label">Active Customers</span><span class="kpi-value" id="an-kpi-active-customers" data-value="0">0</span><span class="summary-tag summary-tag--derived">Not archived + has orders</span></article>
+        </div>
+
+        <div class="kpi-grid">
+          <article class="kpi-card"><span class="kpi-label">Pipeline Success Rate</span><span class="kpi-value kpi-value--ok" id="an-kpi-success-rate" data-value="0">0</span><span class="kpi-unit">%</span><span class="summary-tag summary-tag--sample">Simulated</span></article>
+          <article class="kpi-card"><span class="kpi-label">Pipeline Throughput</span><span class="kpi-value" id="an-kpi-pipeline-throughput" data-value="0">0</span><span class="kpi-unit">events/sec</span><span class="summary-tag summary-tag--sample">Simulated</span></article>
         </div>
 
         <div class="charts-grid">

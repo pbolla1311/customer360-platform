@@ -1,5 +1,163 @@
 # Current Task
 
+## Task: Customer360 Cloud v3.0 — Enterprise Customer Data Platform
+
+**Branch:** `feature/customer360-cloud-v3` (created from `feature/customer360-cloud-v2`)
+**Status:** Complete
+**Started / Completed:** 2026-07-27
+
+### What shipped
+
+Completed the customer lifecycle (Status/Archive/Tags) and added the
+fields a real ops/audit product needs (Correlation ID, before/after audit
+diffs), plus the cross-cutting features that make the workspace feel
+finished: Global Search, a Notification Center, a tabbed Customer Profile,
+and enhanced Monitoring/Analytics/Overview views — all layered on the
+v2.0 workspace shell and existing backend, per the task's "do not rewrite"
+instruction.
+
+### Key design decisions
+
+(See docs/ARCHITECTURE.md → "Workspace Lifecycle & Audit Trail (v3.0)"
+and README → "v3.0: full customer lifecycle, audit trail, search &
+notifications" for the full reasoning.)
+
+1. **One additive migration** (`fddaf5d4cd64`, real `op.add_column` calls
+   — unlike three of the four prior migrations, which were empty stubs;
+   fixed the pattern going forward rather than repeating it): `status`
+   (`active`/`archived`, default `active`) and `tags` (JSON-in-`TEXT`,
+   default `[]`) on `customer360_profiles`. **Customer Score stays
+   computed, never a column** — confirmed with the user before writing
+   the migration, matching the app's existing "derived, not fabricated"
+   convention (same as the pre-existing Active/Dormant label).
+2. **Correlation ID needed zero engine changes.** A Pydantic
+   `@computed_field` (`corr-{event_id}`) on `SimulatedEventResponse` gives
+   every event response a deterministic correlation ID for free.
+3. **Audit trail is one new dataclass + one optional field.**
+   `AuditEntry(actor, changes, before, after)` and `EventTrace.audit:
+   AuditEntry | None = None` (defaulted -- every existing construction
+   site unaffected). `record_customer_update()` threads it through as-is;
+   the engine never computes the diff itself, only `main.py`'s
+   `demo_update_customer` handler does, via one `before`/`after` snapshot
+   whose `changes` list **replaced and generalized** v2's separate
+   `email_changed`/`address_changed` booleans.
+4. **Archive/Restore reuse the existing `PATCH` endpoint** (no new
+   route), matching "reuse existing APIs."
+5. **Orders tab is an honest aggregate**, not fabricated per-order rows —
+   this schema has no per-order ledger.
+6. **Monitoring's "Service Uptime" is an instantaneous snapshot**
+   (healthy/total right now), explicitly not a fabricated historical
+   percentage, since no service-status history is stored anywhere.
+7. **Overview's "Upcoming Tasks" only surfaces real, nonzero signals**
+   (DLQ depth, retry-queue depth, archived-customer count) — never a
+   generic fabricated to-do list.
+8. **Global Search and the Notification Center are pure client-side
+   aggregation** over data other views already fetch (`/demo/api/customers`,
+   `/demo/api/pipeline/history`, `/services`) — zero new backend
+   endpoints. Notification unread state uses a `localStorage` timestamp
+   (no session/auth concept exists to hang it off of).
+9. **Customer Profile deep-linking via `history.replaceState`**, not
+   `location.hash` — updates the URL to `#/customers/{id}` without firing
+   a redundant `hashchange` (the view isn't changing). `parseViewFromHash`
+   was generalized to take only the first path segment so existing plain
+   `#/customers` links are unaffected; a new `parseHashParam` extracts the
+   id for direct/shared URLs and Global Search results. Explicitly a
+   simplification, not full router history — documented as a known
+   limitation (no back/forward stepping through past selections).
+10. **`PipelineViewLogic` and `AnalyticsLogic` exposed on `window`**
+    (mirroring v2's `window.WorkspaceLogic`/`window.Workspace` pattern) so
+    the Customers view's Events/Pipeline Trace tabs and Overview's growth
+    sparkline can reuse existing stage-derivation/ISO-week logic instead
+    of duplicating it — safe regardless of `<script>` tag order, since
+    every `DOMContentLoaded` handler only runs after all four workspace
+    scripts have finished executing their top-level code.
+
+### Files changed/added
+
+- `alembic/versions/fddaf5d4cd64_*.py` — new migration.
+- `customer360/infrastructure/models.py` — `status`, `tags` columns.
+- `customer360/api/pipeline_simulation_engine.py` — `AuditEntry`,
+  `EventTrace.audit`, `record_customer_update(audit=...)`.
+- `customer360/api/main.py` — `correlation_id` computed field,
+  `AuditDetailResponse`, `EventTraceResponse.audit`, customer
+  `status`/`tags` fields, `_parse_tags`/`_dump_tags` helpers, PATCH
+  handler rewritten around one before/after snapshot.
+- `customer360/api/static/workspace/index.html` — status filter,
+  pagination controls, tabbed Customer Profile (6 tabs), Pipeline
+  current-event strip, Monitoring uptime KPI + 2 charts, Analytics CLV/
+  Active Customers/Pipeline Metrics KPIs, Overview growth sparkline/
+  Upcoming Tasks/Quick Actions, topbar Global Search + Notification
+  Center.
+- `customer360/api/static/workspace/workspace.css` — tabs, filters,
+  pagination, tag chips, score badge, archive actions, topbar search/
+  notification dropdown styles.
+- `customer360/api/static/workspace/workspace.js` — `parseHashParam`,
+  `buildNotifications`, `countUnread`, `runGlobalSearch`,
+  `deriveUpcomingTasks`, `getHashParam`, growth sparkline, Global
+  Search + Notification Center DOM wiring.
+- `customer360/api/static/workspace/workspace-customers.js` — status
+  filter, tag diffing, Customer Score, pagination, tabbed profile
+  rendering (Overview/Timeline/Orders/Events/Audit/Trace), archive
+  toggle, hash-based deep-linking.
+- `customer360/api/static/workspace/workspace-pipeline.js` — Correlation
+  ID column, Pipeline current-event strip, Monitoring charts + uptime
+  snapshot, Audit Logs before/after rendering, `window.PipelineViewLogic`
+  export.
+- `customer360/api/static/workspace/workspace-analytics.js` — CLV,
+  Active Customers, pipeline success rate, `window.AnalyticsLogic` export.
+- Tests: `tests/api/test_pipeline_simulation_engine.py` (+4),
+  `tests/api/test_main.py` (+11 PATCH status/tags/audit/correlation_id
+  cases, +2 pipeline/history cases), `tests/api/test_workspace_js.py`
+  (+17), `tests/api/test_workspace_customers_js.py` (+16),
+  `tests/api/test_workspace_pipeline_js.py` (+3),
+  `tests/api/test_workspace_analytics_js.py` (+7).
+- Docs: `docs/ARCHITECTURE.md` new section; `README.md` new v3.0
+  subsection + updated API/Data-Model tables + Limitations; `CHANGELOG.md`
+  populated (was empty) with v1.1–v3.0 entries.
+
+### Verified
+
+- `pytest -q`: **364 passed**, 0 failed (306 at session start + 58 new).
+- `ruff check .` clean, `mypy customer360` clean (33 source files).
+- `alembic upgrade head` applied cleanly against the real local Postgres
+  dev database (previously only had the baseline table — three of the
+  four prior migrations turned out to be empty stubs, a pre-existing gap
+  this migration did not repeat).
+- Manual curl-driven end-to-end run: archived a seeded customer with
+  tags → confirmed the real DB row updated independently of the response,
+  the event was labeled `"Account Archived"`, `correlation_id` and the
+  full `audit` before/after block were present in both the PATCH response
+  and `GET /demo/api/pipeline/history`, tags were deduplicated/sorted, and
+  `/demo`/`/demo/pipeline`/`/docs` remained unaffected.
+- CSP compliance re-verified on the expanded `/workspace` HTML: zero
+  inline `<script>`/`<style>`, zero `style="..."` attributes.
+- **One a11y bug caught by IDE diagnostics before it shipped**: the
+  Archive toggle button was authored with dynamically-set-only text
+  (empty at parse time), which the accessibility linter flagged as
+  "no discernible text." Fixed by giving it static default text
+  ("Archive Customer") that JS then updates.
+- **One ARIA bug caught by IDE diagnostics**: the Notification Center
+  dropdown was given `role="menu"` with a plain `<ul>` child, which
+  requires `menuitem` children specifically. Fixed by dropping the
+  `role` in favor of a plain `aria-label`, since full menu keyboard
+  semantics weren't being implemented anyway.
+
+### Known limitations
+
+- Same global-engine caveat as v1.2/v2.0.
+- Monitoring's Service Uptime, Overview's Upcoming Tasks, and the
+  Notification Center's unread counter are all explicitly scoped as
+  described above (instant snapshot / real-signals-only / per-browser)
+  — see README → Limitations for the full list.
+- Customer Profile deep-linking has no back/forward history stepping.
+- No screenshot checklist added for the v3.0 UI changes (same standing
+  gap noted for prior tasks' pages).
+- The four `test_workspace_*_js.py` files (and `test_demo_js.py`/
+  `test_pipeline_js.py`) still aren't wired into the CI `quality` job —
+  flagged after v1.1, v1.2, and v2.0 too, still not done.
+
+---
+
 ## Task: Customer360 Cloud v2.0 — Workspace Transformation
 
 **Branch:** `feature/customer360-cloud-v2` (created from `feature/pipeline-simulator-v1.2`)

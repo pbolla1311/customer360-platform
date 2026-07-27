@@ -1,8 +1,9 @@
 import html
+import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path as FilesystemPath
-from typing import Any, cast
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import (
     APIRouter,
@@ -17,7 +18,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -28,6 +29,7 @@ from sqlalchemy.orm import Session
 from customer360.api.audit_logging import AuditLoggingMiddleware
 from customer360.api.pipeline_simulation_engine import (
     ENGINE,
+    AuditEntry,
     FailureType,
     PipelineEngineError,
 )
@@ -98,6 +100,8 @@ class CustomerProfileResponse(BaseModel):
     transaction_count: int
     total_spend: float
     average_transaction_value: float
+    status: str
+    tags: list[str]
     created_at: datetime
     updated_at: datetime
 
@@ -204,6 +208,24 @@ class SimulatedEventResponse(BaseModel):
     retry_count: int
     failure_type: str | None
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def correlation_id(self) -> str:
+        # Deterministic (same event_id -> same correlation_id always), not
+        # a stored engine field -- every event this engine has ever produced
+        # (Control Center actions and real customer edits alike) gets one
+        # for free, with zero changes to pipeline_simulation_engine.py.
+        return f"corr-{self.event_id}"
+
+
+class AuditDetailResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    actor: str
+    changes: list[str]
+    before: dict[str, Any]
+    after: dict[str, Any]
+
 
 class EventTraceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -211,6 +233,7 @@ class EventTraceResponse(BaseModel):
     event: SimulatedEventResponse
     steps: list[TraceStepResponse]
     replay: bool
+    audit: AuditDetailResponse | None = None
 
 
 class PipelineStateResponse(BaseModel):
@@ -241,6 +264,10 @@ class CustomerUpdateRequest(BaseModel):
     )
     city: str | None = Field(default=None, min_length=1, max_length=100)
     state: str | None = Field(default=None, min_length=1, max_length=100)
+    status: Literal["active", "archived"] | None = None
+    tags: (
+        list[Annotated[str, Field(min_length=1, max_length=40)]] | None
+    ) = Field(default=None, max_length=20)
 
 
 class CustomerUpdateResponse(BaseModel):
@@ -465,6 +492,22 @@ def redoc_init_js(
 v1 = APIRouter(prefix="/api/v1", tags=["v1"])
 
 
+def _parse_tags(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(tag) for tag in parsed]
+
+
+def _dump_tags(tags: list[str]) -> str:
+    return json.dumps(sorted(set(tags)))
+
+
 def serialize_profile(profile: Customer360Profile) -> dict[str, Any]:
     return {
         "customer_id": profile.customer_id,
@@ -476,6 +519,8 @@ def serialize_profile(profile: Customer360Profile) -> dict[str, Any]:
         "transaction_count": profile.transaction_count,
         "total_spend": profile.total_spend,
         "average_transaction_value": profile.average_transaction_value,
+        "status": profile.status,
+        "tags": _parse_tags(profile.tags),
         "created_at": profile.created_at,
         "updated_at": profile.updated_at,
     }
@@ -1190,10 +1235,15 @@ def demo_update_customer(
             detail="Customer not found",
         )
 
-    email_changed = body.email is not None and body.email != profile.email
-    address_changed = (body.city is not None and body.city != profile.city) or (
-        body.state is not None and body.state != profile.state
-    )
+    before: dict[str, Any] = {
+        "first_name": profile.first_name,
+        "last_name": profile.last_name,
+        "email": profile.email,
+        "city": profile.city,
+        "state": profile.state,
+        "status": profile.status,
+        "tags": _parse_tags(profile.tags),
+    }
 
     if body.first_name is not None:
         profile.first_name = body.first_name
@@ -1205,20 +1255,46 @@ def demo_update_customer(
         profile.city = body.city
     if body.state is not None:
         profile.state = body.state
+    if body.status is not None:
+        profile.status = body.status
+    if body.tags is not None:
+        profile.tags = _dump_tags(list(body.tags))
 
     updated = repository.update(profile)
 
-    if email_changed:
+    after: dict[str, Any] = {
+        "first_name": updated.first_name,
+        "last_name": updated.last_name,
+        "email": updated.email,
+        "city": updated.city,
+        "state": updated.state,
+        "status": updated.status,
+        "tags": _parse_tags(updated.tags),
+    }
+
+    changes = [key for key in before if before[key] != after[key]]
+
+    if "status" in changes and after["status"] == "archived":
+        event_type = "Account Archived"
+    elif "email" in changes:
         event_type = "Email Changed"
-    elif address_changed:
+    elif "city" in changes or "state" in changes:
         event_type = "Address Changed"
     else:
         event_type = "Customer Updated"
 
-    trace = ENGINE.record_customer_update(customer_id, event_type, session=session)
+    audit = (
+        AuditEntry(actor="Workspace User", changes=changes, before=before, after=after)
+        if changes
+        else None
+    )
+
+    trace = ENGINE.record_customer_update(
+        customer_id, event_type, session=session, audit=audit
+    )
 
     return CustomerUpdateResponse(
-        profile=CustomerProfileResponse.model_validate(updated),
+        profile=CustomerProfileResponse.model_validate(serialize_profile(updated)),
         trace=EventTraceResponse.model_validate(trace),
     )
 

@@ -92,6 +92,42 @@
     };
   }
 
+  // customer.status defaults to "active" for any row that predates the
+  // status column -- never silently excludes older data.
+  function nonArchivedCustomers(customers) {
+    return customers.filter(function (c) {
+      return (c.status || "active") !== "archived";
+    });
+  }
+
+  // Derived, not stored: average lifetime spend across non-archived
+  // customers -- the honest proxy available in a schema with rolled-up
+  // totals instead of a full order history.
+  function averageCustomerLifetimeValue(customers) {
+    var active = nonArchivedCustomers(customers);
+    if (active.length === 0) {
+      return 0;
+    }
+    return sumTotalSpend(active) / active.length;
+  }
+
+  // Distinct from Overview's "Active Profiles" (transaction_count > 0
+  // over ALL customers): this also excludes archived customers, since an
+  // executive "active customers" figure shouldn't count accounts that
+  // have been archived even if they have historical transactions.
+  function countActiveCustomers(customers) {
+    return customers.filter(function (c) {
+      return (c.status || "active") !== "archived" && (c.transaction_count || 0) > 0;
+    }).length;
+  }
+
+  function pipelineSuccessRate(kpis) {
+    if (!kpis || !kpis.messages_processed) {
+      return 0;
+    }
+    return (kpis.successful_events / kpis.messages_processed) * 100;
+  }
+
   function topCustomers(customers, limit) {
     return customers
       .slice()
@@ -115,6 +151,10 @@
     isoWeekKey: isoWeekKey,
     topCustomers: topCustomers,
     formatCurrency: formatCurrency,
+    nonArchivedCustomers: nonArchivedCustomers,
+    averageCustomerLifetimeValue: averageCustomerLifetimeValue,
+    countActiveCustomers: countActiveCustomers,
+    pipelineSuccessRate: pipelineSuccessRate,
   };
 
   if (typeof module !== "undefined" && module.exports) {
@@ -128,6 +168,12 @@
   if (typeof document === "undefined") {
     return;
   }
+
+  // Exposed so workspace.js's Overview "Customer Growth" sparkline can
+  // reuse the same ISO-week bucketing instead of duplicating it -- see
+  // the identical window.PipelineViewLogic export in workspace-pipeline.js
+  // for why script load order doesn't matter here.
+  window.AnalyticsLogic = AnalyticsLogic;
 
   document.addEventListener("DOMContentLoaded", function () {
     if (!window.Workspace) {
@@ -204,6 +250,10 @@
     var kpiTransactions = document.getElementById("an-kpi-transactions");
     var kpiAov = document.getElementById("an-kpi-aov");
     var kpiCustomers = document.getElementById("an-kpi-customers");
+    var kpiClv = document.getElementById("an-kpi-clv");
+    var kpiActiveCustomers = document.getElementById("an-kpi-active-customers");
+    var kpiSuccessRate = document.getElementById("an-kpi-success-rate");
+    var kpiPipelineThroughput = document.getElementById("an-kpi-pipeline-throughput");
     var topCustomersBody = document.getElementById("an-top-customers-body");
 
     function renderTopCustomers(customers) {
@@ -242,10 +292,15 @@
     }
 
     function loadAnalytics() {
-      Promise.all([fetchJson("/demo/api/customers"), fetchJson("/demo/api/pipeline/charts")])
+      Promise.all([
+        fetchJson("/demo/api/customers"),
+        fetchJson("/demo/api/pipeline/charts"),
+        fetchJson("/demo/api/pipeline/summary"),
+      ])
         .then(function (results) {
           var customers = results[0];
           var pipelineCharts = results[1];
+          var pipelineSummary = results[2];
 
           animateValue(kpiRevenue, AnalyticsLogic.sumTotalSpend(customers), AnalyticsLogic.formatCurrency);
           animateValue(kpiTransactions, AnalyticsLogic.sumTransactions(customers), function (v) {
@@ -254,6 +309,24 @@
           animateValue(kpiAov, AnalyticsLogic.averageOrderValue(customers), AnalyticsLogic.formatCurrency);
           animateValue(kpiCustomers, customers.length, function (v) {
             return String(Math.round(v));
+          });
+          animateValue(
+            kpiClv,
+            AnalyticsLogic.averageCustomerLifetimeValue(customers),
+            AnalyticsLogic.formatCurrency
+          );
+          animateValue(kpiActiveCustomers, AnalyticsLogic.countActiveCustomers(customers), function (v) {
+            return String(Math.round(v));
+          });
+          animateValue(
+            kpiSuccessRate,
+            AnalyticsLogic.pipelineSuccessRate(pipelineSummary.kpis),
+            function (v) {
+              return v.toFixed(1);
+            }
+          );
+          animateValue(kpiPipelineThroughput, pipelineSummary.kpis.events_per_sec, function (v) {
+            return v.toFixed(2);
           });
 
           var growth = AnalyticsLogic.growthByWeek(customers);

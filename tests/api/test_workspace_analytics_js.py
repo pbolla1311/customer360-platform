@@ -130,3 +130,54 @@ def test_top_customers_sorts_by_spend_descending_and_respects_limit():
 def test_format_currency_matches_two_decimal_places():
     assert _run_node("an.formatCurrency(1234.5)") == "$1234.50"
     assert _run_node("an.formatCurrency(0)") == "$0.00"
+
+
+# ---------------------------------------------------------------------
+# v3.0 additions: CLV, active-customer count, pipeline success rate --
+# all aware of the new customer.status ("active" | "archived") field
+# ---------------------------------------------------------------------
+
+CUSTOMERS_MIXED_STATUS = [
+    dict(CUSTOMERS[0], status="active"),  # spend 400, 4 transactions
+    dict(CUSTOMERS[1], status="archived"),  # spend 100, 1 transaction
+    dict(CUSTOMERS[2], status="active", transaction_count=0),  # spend 0, 0 transactions
+]
+
+
+def test_non_archived_customers_excludes_archived_rows():
+    result = _run_node(f"an.nonArchivedCustomers({json.dumps(CUSTOMERS_MIXED_STATUS)})")
+    assert [c["customer_id"] for c in result] == ["CLOUD-0001", "CLOUD-0003"]
+
+
+def test_non_archived_customers_treats_missing_status_as_active():
+    # CUSTOMERS[0] has no "status" key at all -- simulates a row from
+    # before the status column existed.
+    assert "status" not in CUSTOMERS[0]
+    result = _run_node(f"an.nonArchivedCustomers({json.dumps([CUSTOMERS[0]])})")
+    assert len(result) == 1
+
+
+def test_average_customer_lifetime_value_excludes_archived():
+    result = _run_node(f"an.averageCustomerLifetimeValue({json.dumps(CUSTOMERS_MIXED_STATUS)})")
+    # Only CLOUD-0001 (400.0) and CLOUD-0003 (0.0) are non-archived -> average 200.0
+    assert result == 200.0
+
+
+def test_average_customer_lifetime_value_zero_when_no_customers():
+    assert _run_node("an.averageCustomerLifetimeValue([])") == 0
+
+
+def test_count_active_customers_excludes_archived_and_zero_transaction_customers():
+    result = _run_node(f"an.countActiveCustomers({json.dumps(CUSTOMERS_MIXED_STATUS)})")
+    # CLOUD-0001 (active, 4 tx) counts; CLOUD-0002 (archived) and CLOUD-0003 (0 tx) don't.
+    assert result == 1
+
+
+def test_pipeline_success_rate_computes_percentage():
+    kpis = {"messages_processed": 200, "successful_events": 150}
+    assert _run_node(f"an.pipelineSuccessRate({json.dumps(kpis)})") == 75.0
+
+
+def test_pipeline_success_rate_zero_when_no_messages_processed():
+    kpis = {"messages_processed": 0, "successful_events": 0}
+    assert _run_node(f"an.pipelineSuccessRate({json.dumps(kpis)})") == 0

@@ -115,3 +115,22 @@ def test_filter_by_status_empty_when_no_match():
 def test_format_thousands_groups_digits():
     assert _run_node("wp.formatThousands(1234567)") == "1,234,567"
     assert _run_node("wp.formatThousands(-500)") == "-500"
+
+
+# ---------------------------------------------------------------------
+# v3.0 addition: Monitoring's honest, instant-snapshot uptime metric
+# ---------------------------------------------------------------------
+
+
+def test_compute_uptime_snapshot_all_healthy_is_100():
+    services = [{"status": "healthy"}, {"status": "healthy"}]
+    assert _run_node(f"wp.computeUptimeSnapshot({json.dumps(services)})") == 100
+
+
+def test_compute_uptime_snapshot_is_healthy_ratio():
+    services = [{"status": "healthy"}, {"status": "critical"}, {"status": "warning"}]
+    assert _run_node(f"wp.computeUptimeSnapshot({json.dumps(services)})") == pytest.approx(33.3)
+
+
+def test_compute_uptime_snapshot_empty_services_is_100():
+    assert _run_node("wp.computeUptimeSnapshot([])") == 100

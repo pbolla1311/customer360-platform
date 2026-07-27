@@ -167,3 +167,83 @@ time-seeded simulation -- a real customer edit is reflected precisely
 (its own event, trace, and timeline entry), the same way the Control
 Center's own actions have always been layered on top of that ambient
 simulation rather than replacing it.
+
+## Workspace Lifecycle & Audit Trail (v3.0)
+
+v3.0 completes the customer lifecycle and adds the fields a real
+operations/audit product needs, again by extending -- not rewriting -- the
+v2.0 pieces above.
+
+**Schema (one additive migration):** `customer360_profiles` gains
+`status` (`'active'` | `'archived'`, default `'active'`) and `tags`
+(JSON-encoded array stored as `TEXT`, default `'[]'`). Customer Score is
+deliberately **not** a column -- it's computed client-side from spend,
+transaction count, and recency, the same "derived, not stored" treatment
+already used for the pre-existing Active/Dormant engagement label.
+
+**Correlation ID -- zero engine changes.** `SimulatedEventResponse` gained
+a Pydantic `@computed_field`, `correlation_id -> f"corr-{event_id}"`.
+Deterministic, computed purely at the response layer, so every endpoint
+that already returns this model (generate/replay/failure/retry/state/
+history/the customer-update response) gained it for free.
+
+**Before/after audit trail -- one new dataclass, one optional field.**
+`pipeline_simulation_engine.py` gained `AuditEntry(actor, changes, before,
+after)` and `EventTrace.audit: AuditEntry | None = None` (defaulted, so
+every existing trace-construction site is unaffected). `record_customer_
+update()` gained an optional `audit` parameter it threads straight
+through -- it never computes the diff itself. That diff lives in
+`main.py`'s `demo_update_customer` handler, which now builds one `before`/
+`after` snapshot (name/email/city/state/**status**/**tags**) and derives
+`changes = [k for k in before if before[k] != after[k]]` -- this single
+list **replaces** v2's separate `email_changed`/`address_changed`
+booleans and now also drives `event_type` selection, with `"Account
+Archived"` added ahead of the existing rules whenever `status` changes to
+`"archived"`.
+
+                PATCH /demo/api/customers/{id}  {"status": "archived"}
+                              │
+              before = {..., status: "active", tags: [...]}
+              (mutate profile.status = "archived")
+              after  = {..., status: "archived", tags: [...]}
+              changes = ["status"]  ->  event_type = "Account Archived"
+                              │
+              ENGINE.record_customer_update(id, event_type,
+                  audit=AuditEntry("Workspace User", changes,
+                                     before, after))
+                              │
+                              ▼
+              GET /demo/api/pipeline/history
+      (each entry's `audit` is populated for real customer edits,
+       and `None` for Control Center demo actions -- both render
+       through the same Event Center / Audit Logs code paths)
+
+**Archive/Restore reuse the existing `PATCH` endpoint** (`{"status":
+"archived"}` / `{"status": "active"}`) rather than a dedicated route --
+consistent with "reuse existing APIs" and the same unauthenticated,
+rate-limited, seeded-data-only surface as the rest of `/demo/api/*`.
+
+**Frontend additions, all client-side aggregation over data other views
+already fetch -- no further backend endpoints:**
+
+| Feature | Source |
+| --- | --- |
+| Customer Score, pagination, status filter | Pure functions over `/demo/api/customers` (already fetched by the Customers view) |
+| Customer Profile tabs (Overview/Timeline/Orders/Events/Audit/Pipeline Trace) | `/demo/api/pipeline/history` filtered to one `customer_id`; "Orders" is an honest relabeling of `transaction_count`/`total_spend`/`average_transaction_value` -- no fabricated per-order rows, since no per-order table exists |
+| Monitoring's Latency/Retry/DLQ trend charts | `/demo/api/pipeline/charts` (already fetched elsewhere) |
+| Monitoring's Service Uptime | Computed instant snapshot (healthy services ÷ total, right now) -- explicitly **not** a fabricated historical percentage, since no service-status history is stored anywhere |
+| Analytics' CLV / Active Customers / Pipeline Metrics | `/demo/api/customers` + `/demo/api/pipeline/summary` (already fetched) |
+| Overview's Customer Growth sparkline, Upcoming Tasks | Reuses Analytics' `growthByWeek`; tasks are real derived signals (nonzero DLQ/retry-queue/archived counts) linking to the relevant view -- never a fabricated generic to-do list |
+| Global Search | Client-side match over the same customers + history payloads the Customers/Event Center views already fetch, cached once per session |
+| Notification Center | Derived from `/demo/api/pipeline/history` + `/services` -- "successful recoveries" are identified structurally (`retry_count > 0` and final `status == "success"`); unread count is tracked via a `localStorage` timestamp, since there's no session/auth concept to hang it off of |
+
+**Customer Profile deep-linking.** Selecting a customer updates the URL
+to `#/customers/{customer_id}` via `history.replaceState` (not
+`location.hash`), so it doesn't fire a redundant `hashchange` -- the view
+isn't changing, only which customer is shown within it. The hash router's
+`parseViewFromHash` now takes only the first path segment, so plain
+`#/customers` links are unaffected; a new `parseHashParam` extracts the
+customer id for direct/shared URLs and Global Search results. This is a
+simplification, not full router history: back/forward doesn't step
+through past selections, only the initial navigation and shareable-URL
+cases are handled.

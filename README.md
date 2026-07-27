@@ -61,6 +61,17 @@ No "Generate Event" button anywhere in the workspace's Customers or Pipeline vie
 
 **Nothing about `/demo`, `/demo/api/*`, `/demo/pipeline`, or `/demo/api/pipeline/*` changed.** Both keep working exactly as documented below — they're no longer the primary entry point (the landing page's main call to action is now "Open Workspace"), but they're kept live for backward compatibility and are linked from the workspace's own Settings view.
 
+### v3.0: full customer lifecycle, audit trail, search & notifications
+
+- **Status, Archive, Tags** — one additive migration adds `status` (`active`/`archived`) and `tags` (JSON array) to `customer360_profiles`. Archiving/restoring a customer reuses the same `PATCH` endpoint (`{"status": "archived"}`) rather than a new route, and is labeled a distinct `"Account Archived"` event. **Customer Score stays computed, not stored** — a derived 0–100 figure from spend, transaction frequency, and recency, same "derived" convention as the pre-existing Active/Dormant label.
+- **Correlation ID** — every event response now includes a deterministic `correlation_id` (`corr-{event_id}`), added as a Pydantic computed field with zero changes to the simulation engine itself.
+- **Before/after audit trail** — a customer edit's `PATCH` response (and its entry in `GET /demo/api/pipeline/history`) now includes an `audit` block: who, which fields changed, and their before/after values. Audit Logs renders this alongside the existing per-stage trace; Control Center demo actions (which have no "before" state to diff) simply carry `audit: null`.
+- **Customer Profile is now tabbed** — Overview, Timeline & Activity, Orders (an honest aggregate of `transaction_count`/`total_spend`/`average_transaction_value` — this schema has no per-order ledger, so nothing is fabricated), Events, Audit, and Pipeline Trace, all sourced from data the Customers view already fetches. Selecting a customer updates the URL to `#/customers/{customer_id}` for a shareable/reloadable link.
+- **Global Search and a Notification Center** live in the topbar — both are pure client-side aggregation over the same `/demo/api/customers` and `/demo/api/pipeline/history` payloads every other view already fetches; no new backend endpoint for either. The Notification Center's unread counter is tracked via a `localStorage` timestamp, since there's no session/auth concept to hang it off of.
+- **Monitoring's "Service Uptime"** is an honest instantaneous snapshot (healthy services ÷ total, right now) — not a fabricated historical percentage, since no service-status history is stored anywhere.
+
+See `docs/ARCHITECTURE.md` → "Workspace Lifecycle & Audit Trail (v3.0)" for the full request/response walkthrough.
+
 ---
 
 ## Demo Dashboard
@@ -76,7 +87,7 @@ _New in v1.1._ **[`/demo`](https://customer360-platform-production.up.railway.ap
 | On the dashboard | Source |
 | --- | --- |
 | Total Customers, Total Transactions | Real — `COUNT(*)` / `SUM(transaction_count)` over `customer360_profiles` |
-| Active Profiles | Real, but derived — profiles with `transaction_count > 0` (there's no `status` column in the schema) |
+| Active Profiles | Real, but derived — profiles with `transaction_count > 0`. (`/demo` predates the `status` column added in v3.0 for the Workspace's Archive feature; it intentionally keeps this original transaction-based definition rather than changing legacy behavior — see Customer360 Cloud Workspace above for the real `status` field.) |
 | Events Processed | **Sample metric** — the API has no live Kafka event count, so this is a labeled, deterministic function of the real transaction/customer counts, computed in the browser |
 | Profile fields (ID, name, email, city, state, transaction count, spend, timestamps) | Real — whatever `customer360_profiles` actually has for that row |
 | Activity Timeline | **Illustrative demo data** — generated entirely client-side in `demo.js` from the selected customer's ID (deterministic, not random, so it's stable across reloads); never a live transactions/events feed |
@@ -450,8 +461,8 @@ All customer-data endpoints are exposed twice: once unversioned (for the live do
 | `GET` | `/demo/api/pipeline/charts` | none | 30/min | Chart series |
 | `GET` | `/demo/api/pipeline/customer/{customer_id}` | none | 120/min | Per-customer event-flow timeline |
 | `GET` | `/workspace` | none | — | Customer360 Cloud Workspace shell HTML page (see [Customer360 Cloud Workspace](#customer360-cloud-workspace)) |
-| `PATCH` | `/demo/api/customers/{customer_id}` | none | 20/min | Updates a customer's name/email/city/state, records a real outbox event, and returns the resulting event trace |
-| `GET` | `/demo/api/pipeline/history` | none | 60/min | Most-recent-first list of every event (Control Center actions and real customer edits) with its full per-stage trace — backs Event Center, Audit Logs, and the Customers timeline |
+| `PATCH` | `/demo/api/customers/{customer_id}` | none | 20/min | Updates a customer's name/email/city/state/**status**/**tags**, records a real outbox event (labeled `Email Changed`/`Address Changed`/`Account Archived`/`Customer Updated`), and returns the resulting event trace **with a before/after audit block** |
+| `GET` | `/demo/api/pipeline/history` | none | 60/min | Most-recent-first list of every event (Control Center actions and real customer edits) with its full per-stage trace, **`correlation_id`, and (for real edits) an `audit` block** — backs Event Center, Audit Logs, and the Customers timeline |
 
 The `/demo/api/*`, `/demo/api/pipeline/*`, and `/workspace` routes are excluded from the OpenAPI schema — they exist to support the `/demo`, `/demo/pipeline`, and `/workspace` pages, not as part of the documented, versioned product API.
 
@@ -470,6 +481,8 @@ The authenticated, versioned surface (`/customers`, `/api/v1/customers*`) is sti
 | `transaction_count` | `Integer` | Default `0` |
 | `total_spend` | `Float` | Default `0.0` |
 | `average_transaction_value` | `Float` | Default `0.0` |
+| `status` | `String(20)` | Default `"active"`; `"archived"` set via the Workspace's Archive action. Added in v3.0 (migration `fddaf5d4cd64`) |
+| `tags` | `Text` | JSON-encoded array of strings, default `"[]"`. Added in v3.0 (migration `fddaf5d4cd64`) |
 | `created_at`, `updated_at` | `DateTime` | `updated_at` auto-updates on write |
 
 **`outbox_events`** — outbox pattern table (see [Limitations](#limitations) for integration status):
@@ -580,6 +593,7 @@ Current revision chain:
 2. `12c285050662` — add `outbox_events` table
 3. `f45862c54dbc` — add retry and dead-letter-queue fields
 4. `1811e890ede7` — add `next_retry_at` timestamp
+5. `fddaf5d4cd64` — add `status` and `tags` to `customer360_profiles` (Customer360 Cloud Workspace v3.0: Archive/Restore + tags)
 
 ## Kubernetes Deployment
 
@@ -700,6 +714,10 @@ Being direct about the current gaps:
 - **`/demo/pipeline`'s Kafka/consumer/outbox telemetry is simulated, not scraped from a live broker.** It's a direct, honest consequence of the two gaps above (no deployed consumer worker, outbox not wired in) — see [Pipeline Monitor](#pipeline-monitor) for exactly which numbers on that page are real vs. simulated, and why.
 - **The Pipeline Control Center's state is global, not per-visitor.** `PipelineSimulationEngine` is one process-wide singleton — if two people have `/demo/pipeline` (or the Workspace's Pipeline tab) open at once, one clicking "Reset Demo" clears what the other is looking at, and a customer edit one visitor makes shows up in every other visitor's Event Center/Audit Logs too. This is a deliberate reading of the task's own "single source of truth" requirement (matching a real shared ops dashboard), not an oversight; a per-session engine keyed by a cookie/token would be the fix if this ever needs to support concurrent independent demos.
 - **The Workspace's Overview/Monitoring throughput and KPI numbers are still `pipeline_telemetry.py`'s ambient, time-seeded simulation**, same as the standalone Pipeline Monitor — a real customer edit is reflected precisely as its own event/trace/timeline entry, but it doesn't change the ambient messages-processed/throughput baseline those views also show.
+- **Monitoring's "Service Uptime" is an instantaneous snapshot, not a historical percentage.** No service-status history is stored anywhere in this app, so it's honestly computed as healthy-services ÷ total at the moment of each poll, not an uptime figure tracked over time.
+- **Overview's "Upcoming Tasks" only ever surfaces real, currently-nonzero signals** (DLQ depth, retry queue depth, archived-customer count) — it is not a general-purpose task/ticket system, and has no persistence of its own.
+- **Customer Profile deep-linking is partial.** Selecting a customer updates the URL (`#/customers/{id}`) via `history.replaceState` for a shareable/reloadable link, but browser back/forward doesn't step through past selections the way a full router history would.
+- **The Notification Center's unread count is per-browser, not per-user.** It's tracked via a `localStorage` timestamp (there's no session/auth concept in this app to attach it to), so it doesn't sync across devices or browsers.
 
 ## Roadmap
 

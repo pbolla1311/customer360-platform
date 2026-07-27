@@ -1753,3 +1753,187 @@ def test_update_customer_persists_a_real_outbox_row_when_db_available():
     finally:
         app.dependency_overrides.pop(get_db_session, None)
         ENGINE.reset()
+
+
+# ---------------------------------------------------------------------
+# PATCH /demo/api/customers/{customer_id} -- v3.0 additions: status/
+# archive, tags, correlation_id, and the before/after audit trail
+# ---------------------------------------------------------------------
+
+
+def test_new_customer_defaults_to_active_status_and_no_tags():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.get("/demo/api/customers/CLOUD-TEST-0001")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "active"
+        assert body["tags"] == []
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_can_archive_and_is_labeled_account_archived():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"status": "archived"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["profile"]["status"] == "archived"
+        assert body["trace"]["event"]["event_type"] == "Account Archived"
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_can_restore_an_archived_customer():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"status": "archived"},
+        )
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"status": "active"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["profile"]["status"] == "active"
+        assert body["trace"]["event"]["event_type"] == "Customer Updated"
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_rejects_invalid_status_value():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"status": "banned"},
+        )
+        assert response.status_code == 422
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_tags_are_deduplicated_and_sorted():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"tags": ["vip", "enterprise", "vip"]},
+        )
+        assert response.status_code == 200
+        assert response.json()["profile"]["tags"] == ["enterprise", "vip"]
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_rejects_too_many_tags():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"tags": [f"tag-{i}" for i in range(21)]},
+        )
+        assert response.status_code == 422
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_response_includes_correlation_id():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"city": "Manchester"},
+        )
+        event = response.json()["trace"]["event"]
+        assert event["correlation_id"] == f"corr-{event['event_id']}"
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_includes_audit_before_after_and_changes():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"city": "Manchester", "state": "MCR"},
+        )
+        audit = response.json()["trace"]["audit"]
+        assert audit["actor"] == "Workspace User"
+        assert set(audit["changes"]) == {"city", "state"}
+        assert audit["before"]["city"] == "London"
+        assert audit["before"]["state"] == "LDN"
+        assert audit["after"]["city"] == "Manchester"
+        assert audit["after"]["state"] == "MCR"
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_update_customer_with_no_actual_changes_has_no_audit():
+    ENGINE.reset()
+    override, _factory = _customer_update_session_override()
+    app.dependency_overrides[get_db_session] = override
+    try:
+        response = client.patch(
+            "/demo/api/customers/CLOUD-TEST-0001",
+            json={"first_name": "Ada"},
+        )
+        assert response.status_code == 200
+        assert response.json()["trace"]["audit"] is None
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        ENGINE.reset()
+
+
+def test_pipeline_history_entries_from_control_center_have_no_audit():
+    ENGINE.reset()
+    try:
+        response = client.post("/demo/api/pipeline/generate")
+        assert response.json()["audit"] is None
+
+        history = client.get("/demo/api/pipeline/history").json()
+        assert history[0]["audit"] is None
+    finally:
+        ENGINE.reset()
+
+
+def test_pipeline_history_entries_include_correlation_id():
+    ENGINE.reset()
+    try:
+        generated = client.post("/demo/api/pipeline/generate").json()
+        history = client.get("/demo/api/pipeline/history").json()
+        assert history[0]["event"]["correlation_id"] == (
+            f"corr-{generated['event']['event_id']}"
+        )
+    finally:
+        ENGINE.reset()

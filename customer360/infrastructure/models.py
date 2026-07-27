@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String
+from sqlalchemy import DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from customer360.infrastructure.session import Base
@@ -39,6 +39,14 @@ class Customer360Profile(Base):
     average_transaction_value: Mapped[float] = mapped_column(
         Float,
         default=0.0,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="active",
+    )
+    tags: Mapped[str] = mapped_column(
+        Text,
+        default="[]",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

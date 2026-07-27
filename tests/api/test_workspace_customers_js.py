@@ -35,6 +35,8 @@ CUSTOMER = {
     "transaction_count": 5,
     "total_spend": 250.5,
     "average_transaction_value": 50.1,
+    "status": "active",
+    "tags": ["vip"],
     "created_at": "2026-01-01T00:00:00",
     "updated_at": "2026-01-02T00:00:00",
 }
@@ -176,3 +178,160 @@ def test_customer_history_filters_by_customer_id():
 def test_customer_history_empty_when_no_match():
     result = _run_node(f"wc.customerHistory({json.dumps(HISTORY)}, 'NOPE')")
     assert result == []
+
+
+# ---------------------------------------------------------------------
+# v3.0 additions: status filter, tags diffing, score, pagination,
+# audit/trace lookups, order aggregation
+# ---------------------------------------------------------------------
+
+CUSTOMERS_MIXED_STATUS = [
+    dict(CUSTOMER, customer_id="CLOUD-0001", status="active"),
+    dict(CUSTOMER, customer_id="CLOUD-0002", status="archived"),
+    dict(CUSTOMER, customer_id="CLOUD-0003", status="active"),
+]
+
+HISTORY_WITH_AUDIT = [
+    {
+        "event": {
+            "event_id": "EVT-000003",
+            "event_type": "Address Changed",
+            "customer_id": "CLOUD-0001",
+            "created_at": "2026-01-04T00:00:00",
+            "status": "success",
+            "retry_count": 0,
+            "failure_type": None,
+            "correlation_id": "corr-EVT-000003",
+        },
+        "steps": [
+            {"stage": "Producer", "status": "ok", "processing_time_ms": 6.0, "timestamp": "2026-01-04T00:00:00"},
+        ],
+        "replay": False,
+        "audit": {
+            "actor": "Workspace User",
+            "changes": ["city", "state"],
+            "before": {"city": "London", "state": "LDN"},
+            "after": {"city": "Manchester", "state": "MCR"},
+        },
+    },
+    {
+        "event": {
+            "event_id": "EVT-000002",
+            "event_type": "Email Changed",
+            "customer_id": "CLOUD-0001",
+            "created_at": "2026-01-03T00:00:00",
+            "status": "success",
+            "retry_count": 0,
+            "failure_type": None,
+            "correlation_id": "corr-EVT-000002",
+        },
+        "steps": [],
+        "replay": False,
+        "audit": None,
+    },
+]
+
+
+def test_filter_by_customer_status_returns_all_when_unfiltered():
+    result = _run_node(f"wc.filterByCustomerStatus({json.dumps(CUSTOMERS_MIXED_STATUS)}, 'all')")
+    assert len(result) == 3
+
+
+def test_filter_by_customer_status_matches_active_only():
+    result = _run_node(f"wc.filterByCustomerStatus({json.dumps(CUSTOMERS_MIXED_STATUS)}, 'active')")
+    assert [c["customer_id"] for c in result] == ["CLOUD-0001", "CLOUD-0003"]
+
+
+def test_filter_by_customer_status_matches_archived_only():
+    result = _run_node(f"wc.filterByCustomerStatus({json.dumps(CUSTOMERS_MIXED_STATUS)}, 'archived')")
+    assert [c["customer_id"] for c in result] == ["CLOUD-0002"]
+
+
+def test_filter_customers_matches_by_tag():
+    result = _run_node(f"wc.filterCustomers([{json.dumps(CUSTOMER)}], 'vip')")
+    assert len(result) == 1
+
+
+def test_parse_tags_input_splits_trims_and_drops_blanks():
+    result = _run_node("wc.parseTagsInput(' vip ,, enterprise ,vip')")
+    assert result == ["vip", "enterprise", "vip"]
+
+
+def test_diff_tags_returns_null_when_unchanged_ignoring_order():
+    result = _run_node(f"wc.diffTags({json.dumps(CUSTOMER)}, 'vip')")
+    assert result is None
+
+
+def test_diff_tags_returns_new_list_when_changed():
+    result = _run_node(f"wc.diffTags({json.dumps(CUSTOMER)}, 'vip, enterprise')")
+    assert result == {"tags": ["vip", "enterprise"]}
+
+
+def test_compute_customer_score_is_bounded_0_to_100():
+    now_ms = _iso_to_ms("2026-01-02T00:00:00Z")
+    score = _run_node(f"wc.computeCustomerScore({json.dumps(CUSTOMER)}, {now_ms})")
+    assert 0 <= score <= 100
+
+
+def test_compute_customer_score_rewards_higher_spend():
+    low = dict(CUSTOMER, total_spend=10.0, transaction_count=1)
+    high = dict(CUSTOMER, total_spend=10000.0, transaction_count=1)
+    now_ms = _iso_to_ms("2026-01-02T00:00:00Z")
+    low_score = _run_node(f"wc.computeCustomerScore({json.dumps(low)}, {now_ms})")
+    high_score = _run_node(f"wc.computeCustomerScore({json.dumps(high)}, {now_ms})")
+    assert high_score > low_score
+
+
+def test_compute_customer_score_decays_with_staleness():
+    now_ms = _iso_to_ms("2028-01-02T00:00:00Z")  # ~2 years after updated_at
+    old_score = _run_node(f"wc.computeCustomerScore({json.dumps(CUSTOMER)}, {now_ms})")
+    fresh_ms = _iso_to_ms("2026-01-02T00:00:01Z")
+    fresh_score = _run_node(f"wc.computeCustomerScore({json.dumps(CUSTOMER)}, {fresh_ms})")
+    assert fresh_score >= old_score
+
+
+def test_paginate_splits_items_and_clamps_page():
+    items = list(range(25))
+    page1 = _run_node(f"wc.paginate({json.dumps(items)}, 1, 10)")
+    assert page1["items"] == list(range(10))
+    assert page1["totalPages"] == 3
+
+    overflow = _run_node(f"wc.paginate({json.dumps(items)}, 99, 10)")
+    assert overflow["page"] == 3
+    assert overflow["items"] == list(range(20, 25))
+
+
+def test_paginate_handles_empty_list():
+    result = _run_node("wc.paginate([], 1, 10)")
+    assert result["items"] == []
+    assert result["totalPages"] == 1
+    assert result["page"] == 1
+
+
+def test_customer_audit_entries_only_returns_entries_with_audit():
+    result = _run_node(f"wc.customerAuditEntries({json.dumps(HISTORY_WITH_AUDIT)}, 'CLOUD-0001')")
+    assert len(result) == 1
+    assert result[0]["event"]["event_id"] == "EVT-000003"
+
+
+def test_latest_trace_for_customer_returns_most_recent_first_entry():
+    result = _run_node(f"wc.latestTraceForCustomer({json.dumps(HISTORY_WITH_AUDIT)}, 'CLOUD-0001')")
+    assert result["event"]["event_id"] == "EVT-000003"
+
+
+def test_latest_trace_for_customer_returns_null_when_no_history():
+    result = _run_node(f"wc.latestTraceForCustomer({json.dumps(HISTORY_WITH_AUDIT)}, 'NOPE')")
+    assert result is None
+
+
+def test_aggregate_order_metrics_relabels_existing_fields():
+    result = _run_node(f"wc.aggregateOrderMetrics({json.dumps(CUSTOMER)})")
+    assert result == {
+        "totalOrders": CUSTOMER["transaction_count"],
+        "totalValue": CUSTOMER["total_spend"],
+        "avgOrderValue": CUSTOMER["average_transaction_value"],
+    }
+
+
+def _iso_to_ms(iso_string: str) -> int:
+    return _run_node(f"new Date({json.dumps(iso_string)}).getTime()")

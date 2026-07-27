@@ -10,6 +10,7 @@ import pytest
 from customer360.api.pipeline_simulation_engine import (
     HAPPY_PATH,
     MAX_RETRIES,
+    AuditEntry,
     EventStatus,
     FailureType,
     PipelineEngineError,
@@ -312,6 +313,55 @@ def test_record_customer_update_event_ids_are_unique_and_increasing(
     second = engine.record_customer_update("CUST-0002", "Email Changed")
 
     assert first.event.event_id != second.event.event_id
+
+
+def test_record_customer_update_without_audit_leaves_it_none(
+    engine: PipelineSimulationEngine,
+):
+    trace = engine.record_customer_update("CUST-0001", "Customer Updated")
+    assert trace.audit is None
+
+
+def test_record_customer_update_threads_audit_entry_through_unchanged(
+    engine: PipelineSimulationEngine,
+):
+    audit = AuditEntry(
+        actor="Workspace User",
+        changes=["email"],
+        before={"email": "old@example.com"},
+        after={"email": "new@example.com"},
+    )
+
+    trace = engine.record_customer_update("CUST-0001", "Email Changed", audit=audit)
+
+    assert trace.audit is audit
+    assert trace.audit.changes == ["email"]
+    assert trace.audit.before == {"email": "old@example.com"}
+    assert trace.audit.after == {"email": "new@example.com"}
+
+
+def test_generate_event_and_inject_failure_never_carry_an_audit_entry(
+    engine: PipelineSimulationEngine,
+):
+    generated = engine.generate_event()
+    assert generated.audit is None
+
+    failed = engine.inject_failure(FailureType.CONSUMER_FAILURE)
+    assert failed.audit is None
+
+
+def test_get_trace_history_preserves_audit_entries(engine: PipelineSimulationEngine):
+    audit = AuditEntry(
+        actor="Workspace User",
+        changes=["status"],
+        before={"status": "active"},
+        after={"status": "archived"},
+    )
+    engine.record_customer_update("CUST-0001", "Account Archived", audit=audit)
+
+    history = engine.get_trace_history()
+
+    assert history[0].audit == audit
 
 
 def test_get_trace_history_is_empty_for_a_fresh_engine(engine: PipelineSimulationEngine):
