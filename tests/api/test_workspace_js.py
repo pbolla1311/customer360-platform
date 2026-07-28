@@ -293,3 +293,92 @@ def test_run_global_search_empty_query_returns_empty_groups():
 def test_run_global_search_no_match_returns_empty_groups():
     result = _run_node(f"ws.runGlobalSearch('zzz-no-match', {json.dumps(SEARCH_DATA)})")
     assert result == {"customers": [], "events": [], "audit": []}
+
+
+# ---------------------------------------------------------------------
+# v3.5 additions: role-based nav gating, role labels, avatar identity
+# ---------------------------------------------------------------------
+
+
+def test_can_view_admin_sees_every_view():
+    for view in [
+        "overview",
+        "customers",
+        "events",
+        "pipeline",
+        "monitoring",
+        "analytics",
+        "audit",
+        "api-explorer",
+        "settings",
+    ]:
+        assert _run_node(f"ws.canView('admin', {json.dumps(view)})") is True
+
+
+def test_can_view_viewer_cannot_manage_org_or_pipeline():
+    assert _run_node("ws.canView('viewer', 'settings')") is False
+    assert _run_node("ws.canView('viewer', 'api-explorer')") is False
+    assert _run_node("ws.canView('viewer', 'overview')") is True
+
+
+def test_can_view_operations_cannot_see_customers_or_analytics():
+    assert _run_node("ws.canView('operations', 'customers')") is False
+    assert _run_node("ws.canView('operations', 'analytics')") is False
+    assert _run_node("ws.canView('operations', 'pipeline')") is True
+
+
+def test_can_view_unknown_view_fails_closed():
+    assert _run_node("ws.canView('admin', 'nonexistent-view')") is False
+
+
+def test_role_label_maps_every_fixed_role():
+    assert _run_node("ws.roleLabel('customer_success')") == "Customer Success"
+    assert _run_node("ws.roleLabel('admin')") == "Admin"
+
+
+def test_role_label_unknown_role_falls_back_to_raw_value():
+    assert _run_node("ws.roleLabel('made-up-role')") == "made-up-role"
+
+
+def test_initials_for_two_word_name():
+    assert _run_node("ws.initialsFor('Mike Torres')") == "MT"
+
+
+def test_initials_for_empty_name_falls_back():
+    assert _run_node("ws.initialsFor('')") == "?"
+
+
+def test_avatar_class_for_is_deterministic_and_in_palette():
+    palette = {"blue", "cyan", "violet", "green", "amber"}
+    first = _run_node("ws.avatarClassFor('priya@acme.test')")
+    second = _run_node("ws.avatarClassFor('priya@acme.test')")
+    assert first == second
+    assert first.replace("login-user-avatar--", "") in palette
+
+
+def test_build_notifications_includes_accepted_invitations():
+    invitations = [
+        {
+            "id": 1,
+            "email": "new.hire@acme.test",
+            "role": "viewer",
+            "status": "accepted",
+            "accepted_at": "2026-01-06T00:00:00",
+        },
+        {
+            "id": 2,
+            "email": "still.pending@acme.test",
+            "role": "operations",
+            "status": "pending",
+            "accepted_at": None,
+        },
+    ]
+    notifications = _run_node(f"ws.buildNotifications([], [], {json.dumps(invitations)})")
+    assert len(notifications) == 1
+    assert notifications[0]["id"] == "invitation-1-accepted"
+    assert "new.hire@acme.test" in notifications[0]["title"]
+    assert notifications[0]["severity"] == "ok"
+
+
+def test_build_notifications_without_invitations_arg_still_works():
+    assert _run_node("ws.buildNotifications([], [])") == []

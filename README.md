@@ -72,6 +72,19 @@ No "Generate Event" button anywhere in the workspace's Customers or Pipeline vie
 
 See `docs/ARCHITECTURE.md` → "Workspace Lifecycle & Audit Trail (v3.0)" for the full request/response walkthrough.
 
+### v3.5: multi-tenant Organizations, Users, Roles & API Keys
+
+The workspace above is now a real multi-tenant SaaS product instead of a single shared demo: Organizations, Users, Roles, Memberships, Invitations, and API Keys, all real database tables with a real migration — not client-side fixtures.
+
+- **Login, not real authentication.** `/login` lets you pick who you're signing in as (`POST /demo/api/auth/login {user_id}`) — no password, no email verification, matching this app's existing "demo-tier, honestly labeled" convention. Sessions are a signed cookie (Starlette's `SessionMiddleware`), not a server-side store. A user with multiple organization memberships sees a workspace picker before landing in `/workspace`; the sidebar gains a workspace switcher (`POST /demo/api/auth/switch-workspace`) and a signed-in user block with Sign Out.
+- **Five fixed roles** — Admin, Operations, Customer Success, Executive, Viewer — each mapped to which sidebar views it can see and which mutating actions it can take (`customer360/tenancy/permissions.py`), mirrored client-side in `workspace.js` for nav hide/redirect. The backend is the real enforcement boundary: role checks 403 on `PATCH` customer, the Pipeline Control Center's inject/retry/recover/reset actions, and every organization-management endpoint.
+- **Org-scoped data, everywhere it matters, nowhere it doesn't.** `customer360_profiles` gained a nullable `organization_id`; `GET /demo/api/customers` and event history return only the signed-in user's organization's data when a session is present, and fall back to the original, unscoped v1.1 behavior with zero session — **`/customers` and `/api/v1/customers*` are completely unaffected**, on purpose (see [Limitations](#limitations)).
+- **Real "who," not a hardcoded label.** A customer edit's audit trail now records the actual signed-in user's name as `actor`, and Event Center/Audit Logs both show an Organization and Triggered By column — Control Center demo actions (which aren't tied to any one user or org) honestly render as "Shared Demo" / "System."
+- **Invitations and API Keys are real, not decorative.** Invitations move through `pending` → `accepted`/`expired`/`revoked` and, on acceptance, create a real membership. API Keys are generated (`sk_live_...`, shown once), sha256-hashed at rest, rotatable, revocable, and track `last_used_at` via a real verify endpoint (`POST /demo/api/api-keys/verify`) — but they intentionally do **not** gate `/api/v1`, which keeps its existing static-key auth unchanged (see [Limitations](#limitations)).
+- **Overview** gained Active Users / Organizations / Pending Invitations KPI cards, and the **Notification Center** gained a real "Invitation accepted" notification type, derived from actual `Invitation.status` transitions.
+
+See `docs/ARCHITECTURE.md` → "Multi-Tenancy (v3.5)" for the full data model (with an ERD), session design, and endpoint list.
+
 ---
 
 ## Demo Dashboard
@@ -463,8 +476,12 @@ All customer-data endpoints are exposed twice: once unversioned (for the live do
 | `GET` | `/workspace` | none | — | Customer360 Cloud Workspace shell HTML page (see [Customer360 Cloud Workspace](#customer360-cloud-workspace)) |
 | `PATCH` | `/demo/api/customers/{customer_id}` | none | 20/min | Updates a customer's name/email/city/state/**status**/**tags**, records a real outbox event (labeled `Email Changed`/`Address Changed`/`Account Archived`/`Customer Updated`), and returns the resulting event trace **with a before/after audit block** |
 | `GET` | `/demo/api/pipeline/history` | none | 60/min | Most-recent-first list of every event (Control Center actions and real customer edits) with its full per-stage trace, **`correlation_id`, and (for real edits) an `audit` block** — backs Event Center, Audit Logs, and the Customers timeline |
+| `GET` | `/login` | none | — | Sign-in page: pick a seeded user, choose a workspace, or create a new organization (see [v3.5](#v35-multi-tenant-organizations-users-roles--api-keys)) |
+| `GET`/`POST` | `/demo/api/auth/*` | none | 20/min (login) | `users`, `login`, `logout`, `session`, `switch-workspace` — session-cookie sign-in, no password |
+| `GET`/`POST` | `/demo/api/organizations*` | session-gated | 20/min | Organization signup/branding, membership list/role-change/removal, invitation send/accept/revoke, API key generate/rotate/revoke — mutations require the Admin role |
+| `POST` | `/demo/api/api-keys/verify` | `X-Org-API-Key` | 60/min | Validates a generated API key's hash, updates `last_used_at` |
 
-The `/demo/api/*`, `/demo/api/pipeline/*`, and `/workspace` routes are excluded from the OpenAPI schema — they exist to support the `/demo`, `/demo/pipeline`, and `/workspace` pages, not as part of the documented, versioned product API.
+The `/demo/api/*`, `/demo/api/pipeline/*`, `/demo/api/auth/*`, `/demo/api/organizations*`, `/workspace`, and `/login` routes are excluded from the OpenAPI schema — they exist to support the `/demo`, `/demo/pipeline`, `/workspace`, and `/login` pages, not as part of the documented, versioned product API.
 
 The authenticated, versioned surface (`/customers`, `/api/v1/customers*`) is still **read-only** — profile creation/updates there happen through the batch ingestion pipeline, not a write endpoint. The one exception is the Customer360 Cloud Workspace's own `PATCH /demo/api/customers/{customer_id}` above, scoped to the same unauthenticated, seeded/fictional demo dataset the rest of `/demo/api/*` already serves (see [Limitations](#limitations)).
 
@@ -483,7 +500,18 @@ The authenticated, versioned surface (`/customers`, `/api/v1/customers*`) is sti
 | `average_transaction_value` | `Float` | Default `0.0` |
 | `status` | `String(20)` | Default `"active"`; `"archived"` set via the Workspace's Archive action. Added in v3.0 (migration `fddaf5d4cd64`) |
 | `tags` | `Text` | JSON-encoded array of strings, default `"[]"`. Added in v3.0 (migration `fddaf5d4cd64`) |
+| `organization_id` | `Integer`, nullable FK → `organizations.id` | Added in v3.5 (migration `41276a9b92f6`); `NULL` for any row created before v3.5, backfilled into a default "Demo Workspace" organization |
 | `created_at`, `updated_at` | `DateTime` | `updated_at` auto-updates on write |
+
+**Multi-tenancy tables** (added in v3.5, migration `41276a9b92f6` — see `docs/ARCHITECTURE.md` → "Multi-Tenancy (v3.5)" for the full ERD):
+
+| Table | Purpose |
+| --- | --- |
+| `organizations` | Tenant: name, unique slug, branding (`logo_url`, `theme`) |
+| `users` | Person: name, unique email, avatar color, status, `last_login_at` |
+| `memberships` | User ↔ Organization ↔ Role (`admin`/`operations`/`customer_success`/`executive`/`viewer`); unique per (user, org) |
+| `invitations` | Pending/accepted/expired/revoked invites to join an organization with a given role |
+| `api_keys` | Per-organization API key: `key_prefix` shown in the UI, `hashed_key` (sha256) at rest, `status`, `last_used_at` |
 
 **`outbox_events`** — outbox pattern table (see [Limitations](#limitations) for integration status):
 
@@ -594,6 +622,7 @@ Current revision chain:
 3. `f45862c54dbc` — add retry and dead-letter-queue fields
 4. `1811e890ede7` — add `next_retry_at` timestamp
 5. `fddaf5d4cd64` — add `status` and `tags` to `customer360_profiles` (Customer360 Cloud Workspace v3.0: Archive/Restore + tags)
+6. `41276a9b92f6` — add `organizations`, `users`, `memberships`, `invitations`, `api_keys` tables and `customer360_profiles.organization_id` (Customer360 Cloud v3.5: multi-tenancy), with a data migration backfilling every pre-existing customer row into a default "Demo Workspace" organization
 
 ## Kubernetes Deployment
 
@@ -717,7 +746,13 @@ Being direct about the current gaps:
 - **Monitoring's "Service Uptime" is an instantaneous snapshot, not a historical percentage.** No service-status history is stored anywhere in this app, so it's honestly computed as healthy-services ÷ total at the moment of each poll, not an uptime figure tracked over time.
 - **Overview's "Upcoming Tasks" only ever surfaces real, currently-nonzero signals** (DLQ depth, retry queue depth, archived-customer count) — it is not a general-purpose task/ticket system, and has no persistence of its own.
 - **Customer Profile deep-linking is partial.** Selecting a customer updates the URL (`#/customers/{id}`) via `history.replaceState` for a shareable/reloadable link, but browser back/forward doesn't step through past selections the way a full router history would.
-- **The Notification Center's unread count is per-browser, not per-user.** It's tracked via a `localStorage` timestamp (there's no session/auth concept in this app to attach it to), so it doesn't sync across devices or browsers.
+- **The Notification Center's unread count is per-browser, not per-user.** It's tracked via a `localStorage` timestamp (there's no session/auth concept in this app to attach it to), so it doesn't sync across devices or browsers. (v3.5's Invitation-accepted notification is now real per-organization data — only the read/unread tracking stays per-browser.)
+- **`/workspace`'s login is demo-tier, not real authentication.** `POST /demo/api/auth/login` takes only a `user_id` — no password, no email verification, no MFA. The session cookie is signed but has no server-side revocation list; it identifies who you're acting as for the demo, not a real security boundary. This is a deliberate, documented scope choice, the same "honestly labeled simplification" already applied to the static `API_KEY`.
+- **No email is ever sent.** Invitations are created, listed, and can be "accepted" via a direct API call (`POST /demo/api/invitations/{id}/accept`) — there's no outbound email/SMTP integration, so in practice an invited user must be told out-of-band that an invitation exists.
+- **Org-scoping stops at `/workspace` and `/demo/api/*`.** The authenticated, versioned surface (`/customers`, `/api/v1/customers*`) remains exactly as it was pre-v3.5: unauthenticated by session, ungated by role, returning every customer regardless of `organization_id`. Extending real multi-tenant isolation to `/api/v1` is future work, not something this feature touches.
+- **API Keys are real but don't functionally gate anything outside `/demo/api/api-keys/verify`.** Generating, rotating, revoking, and verifying a key against its stored hash are all real; `/api/v1`'s existing static `API_KEY` check is untouched, so an org's API key can't currently be used to call the real customer API.
+- **"User mentions" and "task assignment" notifications from the original spec were descoped.** Neither concept has any underlying data model in this app (no comments, no @mentions, no task-assignment table) — rather than fabricate fake ones, only the real "Invitation accepted" notification type was added, matching the "derive, don't fabricate" rule already applied elsewhere (see [v3.0](#v30-full-customer-lifecycle-audit-trail-search--notifications)).
+- **Read-level role gating is enforced both client- and server-side, but unevenly.** Hiding a nav item a role can't see is enforced in both `workspace.js` and, for the views' own read endpoints where practical; but a few read-only tenancy endpoints (org member/invitation listing) are Admin-only outright rather than exposed read-only to every role — a deliberate simplification, not partial coverage of a broader plan.
 
 ## Roadmap
 

@@ -35,6 +35,73 @@
     settings: "Settings",
   };
 
+  // v3.5 multi-tenancy: mirrors customer360/tenancy/permissions.py's
+  // NAV_PERMISSIONS exactly -- the backend is the enforced source of
+  // truth (403s on privileged actions regardless of what this hides),
+  // this copy only drives which nav items the client shows.
+  var NAV_PERMISSIONS = {
+    overview: ["admin", "operations", "customer_success", "executive", "viewer"],
+    customers: ["admin", "customer_success", "viewer"],
+    events: ["admin", "operations", "customer_success", "viewer"],
+    pipeline: ["admin", "operations", "viewer"],
+    monitoring: ["admin", "operations", "viewer"],
+    analytics: ["admin", "executive", "viewer"],
+    audit: ["admin", "operations", "customer_success", "executive", "viewer"],
+    "api-explorer": ["admin"],
+    settings: ["admin"],
+  };
+
+  function canView(role, view) {
+    var allowed = NAV_PERMISSIONS[view];
+    if (!allowed) {
+      return false;
+    }
+    return allowed.indexOf(role) !== -1;
+  }
+
+  var ROLE_LABELS = {
+    admin: "Admin",
+    operations: "Operations",
+    customer_success: "Customer Success",
+    executive: "Executive",
+    viewer: "Viewer",
+  };
+
+  function roleLabel(role) {
+    return ROLE_LABELS[role] || role || "";
+  }
+
+  // Deterministic "SJ"-from-"Sarah Johnson" initials, and a matching
+  // deterministic avatar-color-class hash -- same techniques as login.js
+  // (kept as an independent copy since each page's script is self-
+  // contained, matching the app's existing per-page-file convention).
+  function initialsFor(name) {
+    var parts = String(name || "")
+      .trim()
+      .split(/\s+/)
+      .filter(function (part) {
+        return part.length > 0;
+      });
+    if (parts.length === 0) {
+      return "?";
+    }
+    if (parts.length === 1) {
+      return parts[0].slice(0, 2).toUpperCase();
+    }
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+
+  var AVATAR_PALETTE = ["blue", "cyan", "violet", "green", "amber"];
+
+  function avatarClassFor(seed) {
+    var text = String(seed || "");
+    var hash = 0;
+    for (var i = 0; i < text.length; i += 1) {
+      hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+    }
+    return "login-user-avatar--" + AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
+  }
+
   function parseViewFromHash(hash) {
     var raw = String(hash || "").replace(/^#\/?/, "");
     var view = raw.split("/")[0];
@@ -149,8 +216,20 @@
   // identified structurally: retry_count > 0 with a final status of
   // "success" can only mean the event failed at least once before this
   // engine's retry mechanism resolved it.
-  function buildNotifications(history, services) {
+  function buildNotifications(history, services, invitations) {
     var notifications = [];
+
+    (invitations || []).forEach(function (invitation) {
+      if (invitation.status === "accepted" && invitation.accepted_at) {
+        notifications.push({
+          id: "invitation-" + invitation.id + "-accepted",
+          title: invitation.email + " accepted their invitation",
+          meta: roleLabel(invitation.role),
+          timestamp: invitation.accepted_at,
+          severity: "ok",
+        });
+      }
+    });
 
     (history || []).forEach(function (entry) {
       var event = entry.event;
@@ -285,6 +364,10 @@
     buildNotifications: buildNotifications,
     countUnread: countUnread,
     runGlobalSearch: runGlobalSearch,
+    canView: canView,
+    roleLabel: roleLabel,
+    initialsFor: initialsFor,
+    avatarClassFor: avatarClassFor,
   };
 
   if (typeof module !== "undefined" && module.exports) {
@@ -415,6 +498,8 @@
     var titleEl = document.getElementById("ws-view-title");
     var navLinks = Array.prototype.slice.call(document.querySelectorAll(".ws-nav-link"));
     var activeView = null;
+    var currentRole = null;
+    var currentOrganizationId = null;
 
     function setActiveNav(viewName) {
       navLinks.forEach(function (link) {
@@ -446,10 +531,21 @@
     }
 
     function onHashChange() {
-      activate(WorkspaceLogic.parseViewFromHash(window.location.hash));
+      var view = WorkspaceLogic.parseViewFromHash(window.location.hash);
+      if (currentRole && !WorkspaceLogic.canView(currentRole, view)) {
+        view = "overview";
+      }
+      activate(view);
     }
 
     window.addEventListener("hashchange", onHashChange);
+
+    function applyNavPermissions(role) {
+      navLinks.forEach(function (link) {
+        var view = link.getAttribute("data-view");
+        link.classList.toggle("is-hidden", !WorkspaceLogic.canView(role, view));
+      });
+    }
 
     // -- Overview view --------------------------------------------------
 
@@ -460,6 +556,9 @@
       kpiThroughput: document.getElementById("ov-kpi-throughput"),
       kpiFailed: document.getElementById("ov-kpi-failed"),
       kpiDlq: document.getElementById("ov-kpi-dlq"),
+      kpiUsers: document.getElementById("ov-kpi-users"),
+      kpiOrgs: document.getElementById("ov-kpi-orgs"),
+      kpiInvites: document.getElementById("ov-kpi-invites"),
       stageMini: document.getElementById("ov-stage-mini"),
       alerts: document.getElementById("ov-alerts"),
       recentActivity: document.getElementById("ov-recent-activity"),
@@ -677,6 +776,34 @@
         .catch(function () {
           // Non-fatal: keep showing the last good snapshot.
         });
+
+      if (currentOrganizationId) {
+        Promise.all([
+          fetchJson("/demo/api/organizations/" + currentOrganizationId + "/members"),
+          fetchJson("/demo/api/organizations"),
+          fetchJson("/demo/api/organizations/" + currentOrganizationId + "/invitations"),
+        ])
+          .then(function (results) {
+            var members = results[0];
+            var orgs = results[1];
+            var invitations = results[2];
+
+            var activeUserCount = members.filter(function (m) {
+              return m.status === "active";
+            }).length;
+            animateValue(ovEls.kpiUsers, activeUserCount, formatValue);
+            animateValue(ovEls.kpiOrgs, orgs.length, formatValue);
+
+            var pendingCount = invitations.filter(function (i) {
+              return i.status === "pending";
+            }).length;
+            animateValue(ovEls.kpiInvites, pendingCount, formatValue);
+          })
+          .catch(function () {
+            // Non-admin roles can't list members/invitations -- KPIs just
+            // keep showing their last value (0 on first load).
+          });
+      }
     }
 
     var overviewInterval = null;
@@ -692,56 +819,6 @@
           overviewInterval = null;
         }
       },
-    });
-
-    // -- Settings view ----------------------------------------------------
-
-    var settingsResetBtn = document.getElementById("ws-settings-reset");
-    var settingsResetStatus = document.getElementById("ws-settings-reset-status");
-    var systemStatusEl = document.getElementById("ws-system-status");
-    var settingsLoaded = false;
-
-    if (settingsResetBtn) {
-      settingsResetBtn.addEventListener("click", function () {
-        settingsResetBtn.disabled = true;
-        postJson("/demo/api/pipeline/reset")
-          .then(function () {
-            if (settingsResetStatus) {
-              settingsResetStatus.textContent = "Simulation data reset.";
-              settingsResetStatus.className = "ws-edit-status ws-edit-status--ok";
-            }
-          })
-          .catch(function (err) {
-            if (settingsResetStatus) {
-              settingsResetStatus.textContent = (err && err.message) || "Couldn't reset simulation data.";
-              settingsResetStatus.className = "ws-edit-status ws-edit-status--error";
-            }
-          })
-          .then(function () {
-            settingsResetBtn.disabled = false;
-          });
-      });
-    }
-
-    Workspace.registerView("settings", {
-      activate: function () {
-        if (settingsLoaded) {
-          return;
-        }
-        settingsLoaded = true;
-        fetchJson("/health")
-          .then(function (health) {
-            if (systemStatusEl) {
-              systemStatusEl.textContent = health.status + " (v" + health.version + ")";
-            }
-          })
-          .catch(function () {
-            if (systemStatusEl) {
-              systemStatusEl.textContent = "Unavailable";
-            }
-          });
-      },
-      deactivate: function () {},
     });
 
     // -- Global Search (topbar) ------------------------------------------
@@ -898,9 +975,19 @@
     }
 
     function loadNotifications() {
-      Promise.all([fetchJson("/demo/api/pipeline/history?limit=100"), fetchJson("/demo/api/pipeline/services")])
+      var invitationsPromise = currentOrganizationId
+        ? fetchJson("/demo/api/organizations/" + currentOrganizationId + "/invitations").catch(function () {
+            return [];
+          })
+        : Promise.resolve([]);
+
+      Promise.all([
+        fetchJson("/demo/api/pipeline/history?limit=100"),
+        fetchJson("/demo/api/pipeline/services"),
+        invitationsPromise,
+      ])
         .then(function (results) {
-          latestNotifications = WorkspaceLogic.buildNotifications(results[0], results[1]);
+          latestNotifications = WorkspaceLogic.buildNotifications(results[0], results[1], results[2]);
           renderNotifBadge();
           if (notifDropdown && !notifDropdown.classList.contains("is-hidden")) {
             renderNotifList();
@@ -935,11 +1022,124 @@
     loadNotifications();
     window.setInterval(loadNotifications, 10000);
 
-    // -- Kick off the router ---------------------------------------------
+    // -- Sidebar user + Sign Out (v3.5) -----------------------------------
 
-    if (!window.location.hash) {
-      window.location.hash = "#/overview";
+    var sidebarAvatar = document.getElementById("ws-user-avatar");
+    var sidebarUserName = document.getElementById("ws-user-name");
+    var sidebarUserRole = document.getElementById("ws-user-role");
+    var signoutBtn = document.getElementById("ws-signout-btn");
+
+    function renderSidebarUser(session) {
+      if (sidebarAvatar) {
+        sidebarAvatar.className = "login-user-avatar " + WorkspaceLogic.avatarClassFor(session.user.email);
+        sidebarAvatar.textContent = WorkspaceLogic.initialsFor(session.user.name);
+      }
+      if (sidebarUserName) {
+        sidebarUserName.textContent = session.user.name;
+      }
+      if (sidebarUserRole) {
+        sidebarUserRole.textContent = WorkspaceLogic.roleLabel(session.role);
+      }
     }
-    onHashChange();
+
+    if (signoutBtn) {
+      signoutBtn.addEventListener("click", function () {
+        postJson("/demo/api/auth/logout").then(function () {
+          window.location.href = "/login";
+        });
+      });
+    }
+
+    // -- Workspace switcher (v3.5) ----------------------------------------
+
+    var switcherBtn = document.getElementById("ws-workspace-btn");
+    var switcherNameEl = document.getElementById("ws-current-org-name");
+    var switcherDropdown = document.getElementById("ws-workspace-dropdown");
+
+    function closeSwitcher() {
+      if (switcherDropdown) {
+        switcherDropdown.classList.add("is-hidden");
+      }
+      if (switcherBtn) {
+        switcherBtn.setAttribute("aria-expanded", "false");
+      }
+    }
+
+    function setupWorkspaceSwitcher(session) {
+      if (!switcherBtn || !switcherDropdown) {
+        return;
+      }
+      switcherNameEl.textContent = session.organization.name;
+
+      switcherBtn.addEventListener("click", function () {
+        var isOpen = !switcherDropdown.classList.contains("is-hidden");
+        if (isOpen) {
+          closeSwitcher();
+          return;
+        }
+
+        fetchJson("/demo/api/organizations").then(function (orgs) {
+          clearChildren(switcherDropdown);
+          orgs.forEach(function (org) {
+            var option = document.createElement("button");
+            option.type = "button";
+            option.className =
+              "ws-workspace-option" + (org.id === session.organization.id ? " is-current" : "");
+            option.textContent = org.name;
+            option.addEventListener("click", function () {
+              closeSwitcher();
+              if (org.id === session.organization.id) {
+                return;
+              }
+              postJson("/demo/api/auth/switch-workspace", { organization_id: org.id }).then(
+                function () {
+                  window.location.reload();
+                }
+              );
+            });
+            switcherDropdown.appendChild(option);
+          });
+        });
+
+        switcherDropdown.classList.remove("is-hidden");
+        switcherBtn.setAttribute("aria-expanded", "true");
+      });
+
+      document.addEventListener("click", function (event) {
+        if (!switcherBtn.contains(event.target) && !switcherDropdown.contains(event.target)) {
+          closeSwitcher();
+        }
+      });
+    }
+
+    // -- Session gate + router kickoff ------------------------------------
+    //
+    // Every other view above has already registered its activate/
+    // deactivate handlers by this point (harmless if never invoked) --
+    // only the router itself waits on the session check, so an
+    // unauthenticated visitor is redirected before any workspace data
+    // loads rather than after a brief flash of it.
+
+    fetchJson("/demo/api/auth/session")
+      .then(function (session) {
+        if (!session.user || !session.organization) {
+          window.location.href = "/login";
+          return;
+        }
+
+        currentRole = session.role;
+        currentOrganizationId = session.organization.id;
+        renderSidebarUser(session);
+        setupWorkspaceSwitcher(session);
+        applyNavPermissions(session.role);
+
+        if (!window.location.hash) {
+          window.location.hash = "#/overview";
+        }
+        onHashChange();
+      })
+      .catch(function () {
+        window.location.href = "/login";
+      });
   });
 })();

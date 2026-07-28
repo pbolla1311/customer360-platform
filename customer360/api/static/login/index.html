@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Sign In — {{APP_TITLE}} Cloud</title>
+<meta name="description" content="Sign in to Customer360 Cloud, or create a new organization workspace."/>
+<link rel="shortcut icon" href="/static/swagger/favicon.png"/>
+<link rel="stylesheet" href="/static/demo/demo.css"/>
+<link rel="stylesheet" href="/static/workspace/workspace.css"/>
+<link rel="stylesheet" href="/static/login/login.css"/>
+</head>
+<body>
+<div class="grid-overlay"></div>
+
+<div class="login-shell">
+  <div class="login-card">
+    <a class="brand login-brand" href="/">
+      <span class="brand-mark">C</span>
+      <span class="brand-name">{{APP_TITLE}} Cloud</span>
+    </a>
+    <p class="login-tagline">Enterprise Customer Data Platform</p>
+
+    <div class="login-tabs" role="tablist" aria-label="Sign in or create an organization">
+      <button type="button" class="login-tab is-active" data-panel="signin" role="tab" aria-selected="true">Sign In</button>
+      <button type="button" class="login-tab" data-panel="signup" role="tab" aria-selected="false">Create Organization</button>
+    </div>
+
+    <div class="login-panel" data-panel="signin">
+      <p class="login-hint" id="signin-hint">Select a demo user to continue as:</p>
+      <ul class="login-user-list" id="login-user-list" aria-label="Demo users">
+        <li class="ws-empty-hint">Loading users&hellip;</li>
+      </ul>
+
+      <div class="login-workspace-picker is-hidden" id="workspace-picker">
+        <p class="login-hint">This user belongs to multiple workspaces. Select one:</p>
+        <ul class="login-user-list" id="workspace-picker-list" aria-label="Workspaces"></ul>
+      </div>
+
+      <p class="login-status" id="signin-status" role="status" aria-live="polite"></p>
+    </div>
+
+    <div class="login-panel is-hidden" data-panel="signup">
+      <p class="login-hint">A company signs up and creates its own workspace:</p>
+      <form class="login-form" id="signup-form">
+        <div class="ws-field">
+          <label for="signup-org-name">Organization name</label>
+          <input class="ws-input" id="signup-org-name" name="name" maxlength="200" required/>
+        </div>
+        <div class="ws-field">
+          <label for="signup-admin-name">Your name</label>
+          <input class="ws-input" id="signup-admin-name" name="admin_name" maxlength="200" required/>
+        </div>
+        <div class="ws-field">
+          <label for="signup-admin-email">Your email</label>
+          <input class="ws-input" id="signup-admin-email" name="admin_email" type="email" maxlength="255" required/>
+        </div>
+        <button type="submit" class="btn btn-primary login-submit">Create Organization</button>
+      </form>
+      <p class="login-status" id="signup-status" role="status" aria-live="polite"></p>
+    </div>
+
+    <p class="login-footnote">
+      Demo-tier sign-in: no passwords, a signed session cookie only. See
+      <a href="/workspace">the workspace</a> once signed in, or return to the
+      <a href="/">landing page</a>.
+    </p>
+  </div>
+</div>
+
+<script src="/static/login/login.js"></script>
+</body>
+</html>

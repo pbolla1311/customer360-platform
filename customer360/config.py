@@ -1,4 +1,5 @@
 import os
+import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -36,3 +37,9 @@ CORS_ALLOWED_ORIGINS = [
 # placeholder instead of a fabricated or broken URL. Set this env var to
 # the real profile URL to enable the link.
 AUTHOR_LINKEDIN_URL = os.getenv("AUTHOR_LINKEDIN_URL", "").strip()
+
+# Signs the Workspace's demo-tier session cookie (who you're signed in as,
+# which organization/role) -- not a real security boundary (no passwords
+# exist anywhere in this app), so an ephemeral per-process fallback is
+# fine: sessions just don't survive a restart if this isn't set.
+SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY") or secrets.token_hex(32)

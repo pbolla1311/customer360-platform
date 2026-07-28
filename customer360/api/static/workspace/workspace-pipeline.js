@@ -128,7 +128,7 @@
       if (history.length === 0) {
         var row = document.createElement("tr");
         var cell = document.createElement("td");
-        cell.colSpan = 8;
+        cell.colSpan = 10;
         cell.className = "ws-empty-hint";
         cell.textContent = "No events yet. Edit a customer or use Pipeline controls to generate one.";
         row.appendChild(cell);
@@ -172,6 +172,14 @@
         var corrTd = document.createElement("td");
         corrTd.textContent = event.correlation_id || "—";
         tr.appendChild(corrTd);
+
+        var orgTd = document.createElement("td");
+        orgTd.textContent = event.organization_id ? "Org #" + event.organization_id : "Shared Demo";
+        tr.appendChild(orgTd);
+
+        var triggeredByTd = document.createElement("td");
+        triggeredByTd.textContent = event.triggered_by || "System";
+        tr.appendChild(triggeredByTd);
 
         var timeTd = document.createElement("td");
         timeTd.textContent = relativeTimeLabel(event.created_at, nowMs);
@@ -548,6 +556,8 @@
           entry.event.event_id +
           " · " +
           (entry.event.correlation_id || "—") +
+          " · " +
+          (entry.event.organization_id ? "Org #" + entry.event.organization_id : "Shared Demo") +
           " · " +
           relativeTimeLabel(entry.event.created_at, nowMs);
         heading.appendChild(title);

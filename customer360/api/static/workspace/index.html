@@ -24,6 +24,14 @@
       <span class="ws-product-tagline">Enterprise Customer Data Platform</span>
     </div>
 
+    <div class="ws-workspace-switcher">
+      <button type="button" class="ws-workspace-switcher-btn" id="ws-workspace-btn" aria-haspopup="true" aria-expanded="false">
+        <span id="ws-current-org-name">Loading&hellip;</span>
+        <span aria-hidden="true">&#9662;</span>
+      </button>
+      <div class="ws-workspace-dropdown is-hidden" id="ws-workspace-dropdown"></div>
+    </div>
+
     <nav class="ws-nav" aria-label="Workspace navigation">
       <a href="#/overview" data-view="overview" class="ws-nav-link">🏠 Overview</a>
       <a href="#/customers" data-view="customers" class="ws-nav-link">👥 Customers</a>
@@ -35,6 +43,15 @@
       <a href="#/api-explorer" data-view="api-explorer" class="ws-nav-link">🧪 API Explorer</a>
       <a href="#/settings" data-view="settings" class="ws-nav-link">⚙ Settings</a>
     </nav>
+
+    <div class="ws-sidebar-user" id="ws-sidebar-user">
+      <span class="login-user-avatar login-user-avatar--blue" id="ws-user-avatar">?</span>
+      <span class="ws-sidebar-user-body">
+        <span class="ws-sidebar-user-name" id="ws-user-name">Not signed in</span>
+        <span class="ws-sidebar-user-role" id="ws-user-role"></span>
+      </span>
+      <button type="button" class="ws-signout-btn" id="ws-signout-btn" title="Sign out" aria-label="Sign out">&#9099;</button>
+    </div>
 
     <div class="ws-sidebar-footer">
       <a href="/">&larr; Landing page</a>
@@ -106,6 +123,21 @@
             <span class="kpi-label">DLQ Messages</span>
             <span class="kpi-value kpi-value--critical" id="ov-kpi-dlq" data-value="0">0</span>
             <span class="summary-tag summary-tag--sample">Simulated</span>
+          </article>
+          <article class="kpi-card">
+            <span class="kpi-label">Active Users</span>
+            <span class="kpi-value" id="ov-kpi-users" data-value="0">0</span>
+            <span class="summary-tag summary-tag--live">Live</span>
+          </article>
+          <article class="kpi-card">
+            <span class="kpi-label">Organizations</span>
+            <span class="kpi-value" id="ov-kpi-orgs" data-value="0">0</span>
+            <span class="summary-tag summary-tag--live">Live</span>
+          </article>
+          <article class="kpi-card">
+            <span class="kpi-label">Pending Invitations</span>
+            <span class="kpi-value" id="ov-kpi-invites" data-value="0">0</span>
+            <span class="summary-tag summary-tag--live">Live</span>
           </article>
         </div>
 
@@ -369,11 +401,13 @@
                   <th>Retry Count</th>
                   <th>Processing Time</th>
                   <th>Correlation ID</th>
+                  <th>Organization</th>
+                  <th>Triggered By</th>
                   <th>Timestamp</th>
                 </tr>
               </thead>
               <tbody id="ws-event-table-body">
-                <tr><td colspan="8" class="ws-empty-hint">Loading events&hellip;</td></tr>
+                <tr><td colspan="10" class="ws-empty-hint">Loading events&hellip;</td></tr>
               </tbody>
             </table>
           </div>
@@ -543,37 +577,163 @@
 
       <!-- ============ Settings ============ -->
       <section data-view="settings" class="ws-view is-hidden">
-        <div class="ws-two-col">
-          <div class="panel">
-            <div class="panel-heading"><h2>Demo Mode</h2></div>
-            <p class="ws-panel-note">
-              Customer360 Cloud runs against seeded, fictional customer data with a simulated
-              event pipeline (no live Kafka broker in this deployment). Real customer edits
-              persist to the database and produce real outbox rows.
-            </p>
-            <p class="ws-panel-note ws-badge-ok">Demo Mode: ON</p>
+        <div class="ws-tabs" role="tablist" aria-label="Settings sections">
+          <button type="button" class="ws-tab is-active" data-settings-tab="general" role="tab" aria-selected="true">General</button>
+          <button type="button" class="ws-tab" data-settings-tab="organization" role="tab" aria-selected="false">Organization</button>
+          <button type="button" class="ws-tab" data-settings-tab="users" role="tab" aria-selected="false">Users</button>
+          <button type="button" class="ws-tab" data-settings-tab="invitations" role="tab" aria-selected="false">Invitations</button>
+          <button type="button" class="ws-tab" data-settings-tab="api-keys" role="tab" aria-selected="false">API Keys</button>
+        </div>
+
+        <div class="ws-tab-panel" data-settings-panel="general">
+          <div class="ws-two-col">
+            <div class="panel">
+              <div class="panel-heading"><h2>Demo Mode</h2></div>
+              <p class="ws-panel-note">
+                Customer360 Cloud runs against seeded, fictional customer data with a simulated
+                event pipeline (no live Kafka broker in this deployment). Real customer edits
+                persist to the database and produce real outbox rows.
+              </p>
+              <p class="ws-panel-note ws-badge-ok">Demo Mode: ON</p>
+            </div>
+            <div class="panel">
+              <div class="panel-heading"><h2>Simulation Controls</h2></div>
+              <p class="ws-panel-note">Reset all simulated pipeline state (Control Center history, in-memory counters). Real customer data is not affected.</p>
+              <button type="button" class="btn btn-secondary" id="ws-settings-reset">Reset All Simulation Data</button>
+              <span class="ws-edit-status" id="ws-settings-reset-status" role="status" aria-live="polite"></span>
+            </div>
           </div>
-          <div class="panel">
-            <div class="panel-heading"><h2>Simulation Controls</h2></div>
-            <p class="ws-panel-note">Reset all simulated pipeline state (Control Center history, in-memory counters). Real customer data is not affected.</p>
-            <button type="button" class="btn btn-secondary" id="ws-settings-reset">Reset All Simulation Data</button>
-            <span class="ws-edit-status" id="ws-settings-reset-status" role="status" aria-live="polite"></span>
+          <div class="ws-two-col">
+            <div class="panel">
+              <div class="panel-heading"><h2>Theme</h2></div>
+              <p class="ws-panel-note">Customer360 Cloud uses a dark, enterprise theme throughout the workspace.</p>
+              <p class="ws-panel-note ws-badge-ok">Theme: Dark (default)</p>
+            </div>
+            <div class="panel">
+              <div class="panel-heading"><h2>System Information</h2></div>
+              <dl class="profile-fields" id="ws-system-info">
+                <dt>Application</dt><dd>{{APP_TITLE}}</dd>
+                <dt>Version</dt><dd>{{APP_VERSION}}</dd>
+                <dt>API Status</dt><dd id="ws-system-status">Checking&hellip;</dd>
+                <dt>Legacy views</dt><dd><a href="/demo">/demo</a> &middot; <a href="/demo/pipeline">/demo/pipeline</a></dd>
+              </dl>
+            </div>
           </div>
         </div>
-        <div class="ws-two-col">
+
+        <div class="ws-tab-panel is-hidden" data-settings-panel="organization">
           <div class="panel">
-            <div class="panel-heading"><h2>Theme</h2></div>
-            <p class="ws-panel-note">Customer360 Cloud uses a dark, enterprise theme throughout the workspace.</p>
-            <p class="ws-panel-note ws-badge-ok">Theme: Dark (default)</p>
+            <div class="panel-heading"><h2>Organization Branding</h2></div>
+            <form class="ws-edit-form" id="settings-org-form">
+              <div class="ws-field">
+                <label for="settings-org-name">Workspace name</label>
+                <input class="ws-input" id="settings-org-name" maxlength="200" required/>
+              </div>
+              <div class="ws-field">
+                <label for="settings-org-logo">Logo URL</label>
+                <input class="ws-input" id="settings-org-logo" maxlength="500" placeholder="https://&hellip;"/>
+              </div>
+              <div class="ws-field">
+                <label for="settings-org-theme">Theme</label>
+                <select class="ws-select" id="settings-org-theme">
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                </select>
+              </div>
+              <div class="ws-edit-actions">
+                <button type="submit" class="btn btn-primary">Save Branding</button>
+                <span class="ws-edit-status" id="settings-org-status" role="status" aria-live="polite"></span>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div class="ws-tab-panel is-hidden" data-settings-panel="users">
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>Users</h2>
+              <span class="summary-tag summary-tag--live">Live</span>
+            </div>
+            <div class="ws-table-wrap">
+              <table class="ws-table" id="settings-users-table">
+                <thead>
+                  <tr><th>User</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr>
+                </thead>
+                <tbody id="settings-users-body">
+                  <tr><td colspan="5" class="ws-empty-hint">Loading&hellip;</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="ws-tab-panel is-hidden" data-settings-panel="invitations">
+          <div class="panel ws-panel-spaced">
+            <div class="panel-heading"><h2>Invite User</h2></div>
+            <form class="ws-edit-form" id="invite-form">
+              <div class="ws-field">
+                <label for="invite-email">Email</label>
+                <input class="ws-input" id="invite-email" type="email" maxlength="255" required/>
+              </div>
+              <div class="ws-field">
+                <label for="invite-role">Role</label>
+                <select class="ws-select" id="invite-role">
+                  <option value="admin">Admin</option>
+                  <option value="operations">Operations</option>
+                  <option value="customer_success" selected>Customer Success</option>
+                  <option value="executive">Executive</option>
+                  <option value="viewer">Viewer</option>
+                </select>
+              </div>
+              <div class="ws-edit-actions">
+                <button type="submit" class="btn btn-primary">Send Invitation</button>
+                <span class="ws-edit-status" id="invite-status" role="status" aria-live="polite"></span>
+              </div>
+            </form>
           </div>
           <div class="panel">
-            <div class="panel-heading"><h2>System Information</h2></div>
-            <dl class="profile-fields" id="ws-system-info">
-              <dt>Application</dt><dd>{{APP_TITLE}}</dd>
-              <dt>Version</dt><dd>{{APP_VERSION}}</dd>
-              <dt>API Status</dt><dd id="ws-system-status">Checking&hellip;</dd>
-              <dt>Legacy views</dt><dd><a href="/demo">/demo</a> &middot; <a href="/demo/pipeline">/demo/pipeline</a></dd>
-            </dl>
+            <div class="panel-heading"><h2>Invitations</h2></div>
+            <div class="ws-table-wrap">
+              <table class="ws-table" id="invitations-table">
+                <thead>
+                  <tr><th>Email</th><th>Role</th><th>Status</th><th>Invited By</th><th>Sent</th><th>Actions</th></tr>
+                </thead>
+                <tbody id="invitations-body">
+                  <tr><td colspan="6" class="ws-empty-hint">Loading&hellip;</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="ws-tab-panel is-hidden" data-settings-panel="api-keys">
+          <div class="panel ws-panel-spaced">
+            <div class="panel-heading"><h2>Generate API Key</h2></div>
+            <p class="ws-panel-note">Real, org-scoped keys with generate/rotate/revoke and last-used tracking. Not wired into the authenticated <code>/api/v1</code> surface -- verify them via <code>POST /demo/api/api-keys/verify</code> instead.</p>
+            <form class="ws-edit-form" id="apikey-form">
+              <div class="ws-field">
+                <label for="apikey-name">Key name</label>
+                <input class="ws-input" id="apikey-name" maxlength="100" required placeholder="e.g. Production Key"/>
+              </div>
+              <div class="ws-edit-actions">
+                <button type="submit" class="btn btn-primary">Generate Key</button>
+                <span class="ws-edit-status" id="apikey-status" role="status" aria-live="polite"></span>
+              </div>
+            </form>
+            <p class="ws-panel-note is-hidden" id="apikey-reveal"></p>
+          </div>
+          <div class="panel">
+            <div class="panel-heading"><h2>API Keys</h2></div>
+            <div class="ws-table-wrap">
+              <table class="ws-table" id="apikeys-table">
+                <thead>
+                  <tr><th>Name</th><th>Key</th><th>Status</th><th>Last Used</th><th>Actions</th></tr>
+                </thead>
+                <tbody id="apikeys-body">
+                  <tr><td colspan="5" class="ws-empty-hint">Loading&hellip;</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </section>
@@ -587,5 +747,6 @@
 <script src="/static/workspace/workspace-customers.js"></script>
 <script src="/static/workspace/workspace-pipeline.js"></script>
 <script src="/static/workspace/workspace-analytics.js"></script>
+<script src="/static/workspace/workspace-settings.js"></script>
 </body>
 </html>

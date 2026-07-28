@@ -4,6 +4,31 @@ All notable changes to this project are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [3.5.0] — Customer360 Cloud: multi-tenant Organizations, Users, Roles & API Keys
+
+### Added
+
+- `organizations`, `users`, `memberships`, `invitations`, `api_keys` tables and a nullable `customer360_profiles.organization_id`, via one Alembic migration (`41276a9b92f6`) that also backfills every pre-existing customer row into a default "Demo Workspace" organization.
+- `/login`: pick a seeded user to sign in as (no password/email verification), then a workspace if the user belongs to more than one organization, or create a brand-new organization from scratch.
+- Demo-tier session auth via Starlette's `SessionMiddleware` (signed cookie, no server-side store) and a new `customer360/tenancy/` package: `Organization`/`User`/`Membership`/`Invitation`/`ApiKey` models and repositories, plus a fixed 5-role permission matrix (`admin`/`operations`/`customer_success`/`executive`/`viewer`) in `customer360/tenancy/permissions.py`.
+- New `/demo/api/*` endpoints: auth (`users`/`login`/`logout`/`session`/`switch-workspace`), organization signup/branding, membership listing/role-change/removal, invitation send/accept/revoke, and API key generate/rotate/revoke/verify.
+- Workspace switcher and signed-in user block in the `/workspace` sidebar; nav items hidden per role via a `NAV_PERMISSIONS` map mirrored in JS.
+- Settings gained Organization, Users, Invitations, and API Keys tabs (reusing the existing `.ws-tabs` component).
+- Event Center and Audit Logs now show Organization and Triggered By; Overview gained Active Users / Organizations / Pending Invitations KPI cards; the Notification Center gained a real "Invitation accepted" type.
+- `scripts/seed_demo_tenancy.py`: idempotent, opt-in seeding of demo organizations, users, memberships, and invitations.
+
+### Changed
+
+- `GET /demo/api/customers` and `GET /demo/api/pipeline/history` return organization-scoped results when a session is present, and fall back to their exact pre-v3.5 (unscoped) behavior with no session — verified by dedicated regression tests.
+- `PATCH /demo/api/customers/{id}`'s audit trail now records the real signed-in user's name as `actor` (falling back to `"Workspace User"` with no session), and 404s/403s on cross-organization access or insufficient role.
+- The Pipeline Control Center's inject-failure/retry/recover/reset actions and all organization-management endpoints now require the `pipeline.operate`/`organization.manage` permission when a session is present; ungated, as before, with no session.
+
+### Scope notes
+
+- Org-scoping is limited to `/workspace` and `/demo/api/*`; `/customers` and `/api/v1/customers*` are unaffected.
+- API Keys are real (generated, hashed, rotatable, revocable, verifiable) but do not gate `/api/v1`, which keeps its existing static-key auth.
+- "User mentions" and "task assignment" notifications from the original spec were descoped — no underlying data model exists for either; only the real "Invitation accepted" notification was added.
+
 ## [3.0.0] — Customer360 Cloud: full customer lifecycle & audit trail
 
 ### Added

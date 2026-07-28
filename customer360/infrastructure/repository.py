@@ -97,6 +97,37 @@ class Customer360Repository:
                 "Unable to list Customer 360 profiles."
             ) from exc
 
+    def list_by_organization(
+        self,
+        organization_id: int,
+    ) -> Sequence[Customer360Profile]:
+        """Same ordering as list_all(), scoped to one organization -- used
+        only by the session-aware Workspace surface (v3.5 multi-tenancy).
+        list_all() itself is untouched so every pre-existing caller
+        (including /customers and /api/v1/customers) is unaffected."""
+
+        try:
+            statement = (
+                select(Customer360Profile)
+                .where(Customer360Profile.organization_id == organization_id)
+                .order_by(
+                    Customer360Profile.total_spend.desc(),
+                    Customer360Profile.customer_id,
+                )
+            )
+
+            return self._session.scalars(statement).all()
+
+        except SQLAlchemyError as exc:
+            logger.exception(
+                "Failed to list Customer 360 profiles by organization",
+                extra={"organization_id": organization_id},
+            )
+
+            raise RepositoryError(
+                "Unable to list Customer 360 profiles."
+            ) from exc
+
     def count_all(self) -> int:
         """Total profile row count via a single aggregate query.
 

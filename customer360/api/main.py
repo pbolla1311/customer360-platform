@@ -19,12 +19,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, computed_field
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.middleware.sessions import SessionMiddleware
 
 from customer360.api.audit_logging import AuditLoggingMiddleware
 from customer360.api.pipeline_simulation_engine import (
@@ -47,13 +47,16 @@ from customer360.api.pipeline_telemetry import (
     compute_kpis,
     status_from_thresholds,
 )
+from customer360.api.rate_limit import limiter
 from customer360.api.security import verify_api_key
 from customer360.api.security_headers import SecurityHeadersMiddleware
+from customer360.api.tenancy_routes import router as tenancy_router
 from customer360.config import (
     API_TITLE,
     API_VERSION,
     AUTHOR_LINKEDIN_URL,
     CORS_ALLOWED_ORIGINS,
+    SESSION_SECRET_KEY,
 )
 from customer360.infrastructure.models import Customer360Profile
 from customer360.infrastructure.repository import (
@@ -63,6 +66,8 @@ from customer360.infrastructure.repository import (
 from customer360.infrastructure.session import get_db_session
 from customer360.logging_config import configure_logging
 from customer360.outbox.repository import OutboxRepository
+from customer360.tenancy.permissions import has_permission
+from customer360.tenancy.session import get_session_context
 
 configure_logging()
 
@@ -207,6 +212,8 @@ class SimulatedEventResponse(BaseModel):
     status: str
     retry_count: int
     failure_type: str | None
+    organization_id: int | None = None
+    triggered_by: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -277,11 +284,6 @@ class CustomerUpdateResponse(BaseModel):
     trace: EventTraceResponse
 
 
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=[],
-)
-
 app = FastAPI(
     title=API_TITLE,
     version=API_VERSION,
@@ -313,6 +315,18 @@ app.add_middleware(
 
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(AuditLoggingMiddleware)
+
+# Demo-tier session (who's signed in, which organization/role) -- see
+# customer360/tenancy/session.py. Not a real security boundary (no
+# passwords exist anywhere in this app); SESSION_SECRET_KEY falls back to
+# a per-process random value, so sessions just don't survive a restart if
+# it isn't set explicitly.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET_KEY,
+    session_cookie="c360_session",
+    same_site="lax",
+)
 
 app.state.limiter = limiter
 app.add_exception_handler(
@@ -367,6 +381,14 @@ PIPELINE_PAGE_HTML = (
 
 WORKSPACE_PAGE_HTML = (
     (STATIC_DIR / "workspace" / "index.html")
+    .read_text()
+    .replace("{{APP_TITLE}}", API_TITLE)
+    .replace("{{APP_VERSION}}", API_VERSION)
+)
+
+
+LOGIN_PAGE_HTML = (
+    (STATIC_DIR / "login" / "index.html")
     .read_text()
     .replace("{{APP_TITLE}}", API_TITLE)
     .replace("{{APP_VERSION}}", API_VERSION)
@@ -703,6 +725,11 @@ def workspace() -> HTMLResponse:
     return HTMLResponse(WORKSPACE_PAGE_HTML)
 
 
+@app.get("/login", include_in_schema=False)
+def login_page() -> HTMLResponse:
+    return HTMLResponse(LOGIN_PAGE_HTML)
+
+
 @app.get("/demo", include_in_schema=False)
 def demo_dashboard() -> HTMLResponse:
     return HTMLResponse(DEMO_PAGE_HTML)
@@ -749,7 +776,15 @@ def demo_customers(
     session: Session = Depends(get_db_session),
 ) -> list[dict[str, Any]]:
     repository = Customer360Repository(session)
-    profiles = repository.list_all()
+    # v3.5: a signed-in Workspace session sees only its own organization's
+    # customers. No session (every pre-existing test/caller) -> unchanged,
+    # full unscoped list.list_all() is untouched by this branch.
+    ctx = get_session_context(request, session)
+    profiles = (
+        repository.list_by_organization(ctx.organization_id)
+        if ctx is not None
+        else repository.list_all()
+    )
     return [serialize_profile(profile) for profile in profiles]
 
 
@@ -779,6 +814,16 @@ def demo_customer(
     profile = repository.get_by_customer_id(customer_id)
 
     if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Customer not found",
+        )
+
+    # v3.5 org isolation: a signed-in session can't fetch a customer that
+    # belongs to a different organization -- surfaced as 404 (not 403) so
+    # this never confirms whether a given customer_id exists elsewhere.
+    ctx = get_session_context(request, session)
+    if ctx is not None and profile.organization_id != ctx.organization_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Customer not found",
@@ -1057,6 +1102,20 @@ def _engine_session_or_none(session: Session) -> Session | None:
     return session if db_reachable else None
 
 
+def _require_pipeline_permission(request: Request, session: Session) -> None:
+    """Gates Inject Failure/Retry/Recover/Reset (v3.5) -- only when a
+    Workspace session is present; every pre-existing test/caller has no
+    session, so this is a no-op for them, matching Generate/Replay above
+    (deliberately left ungated, per the approved scope)."""
+
+    ctx = get_session_context(request, session)
+    if ctx is not None and not has_permission(ctx.role, "pipeline.operate"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Role '{ctx.role}' cannot operate the pipeline",
+        )
+
+
 @app.post(
     "/demo/api/pipeline/generate",
     response_model=EventTraceResponse,
@@ -1107,6 +1166,7 @@ def pipeline_inject_failure(
     body: InjectFailureRequest,
     session: Session = Depends(get_db_session),
 ) -> EventTraceResponse:
+    _require_pipeline_permission(request, session)
     trace = ENGINE.inject_failure(
         body.failure_type,
         session=_engine_session_or_none(session),
@@ -1131,6 +1191,7 @@ def pipeline_retry_event(
     request: Request,
     session: Session = Depends(get_db_session),
 ) -> EventTraceResponse:
+    _require_pipeline_permission(request, session)
     try:
         trace = ENGINE.retry_failed_event(session=_engine_session_or_none(session))
     except PipelineEngineError as exc:
@@ -1146,7 +1207,11 @@ def pipeline_retry_event(
     include_in_schema=False,
 )
 @limiter.limit("20/minute")
-def pipeline_recover_consumer(request: Request) -> PipelineStateResponse:
+def pipeline_recover_consumer(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> PipelineStateResponse:
+    _require_pipeline_permission(request, session)
     state = ENGINE.recover_consumer()
     return PipelineStateResponse.model_validate(state)
 
@@ -1161,6 +1226,7 @@ def pipeline_reset_demo(
     request: Request,
     session: Session = Depends(get_db_session),
 ) -> PipelineStateResponse:
+    _require_pipeline_permission(request, session)
     state = ENGINE.reset(session=_engine_session_or_none(session))
     return PipelineStateResponse.model_validate(state)
 
@@ -1184,11 +1250,25 @@ def pipeline_get_state(request: Request) -> PipelineStateResponse:
 def pipeline_history(
     request: Request,
     limit: int = Query(50, ge=1, le=200),
+    session: Session = Depends(get_db_session),
 ) -> list[EventTraceResponse]:
-    return [
-        EventTraceResponse.model_validate(trace)
-        for trace in ENGINE.get_trace_history(limit=limit)
-    ]
+    traces = ENGINE.get_trace_history(limit=limit)
+
+    # v3.5: a signed-in session sees its own organization's real customer
+    # events plus every Control Center demo event (organization_id=None,
+    # i.e. "Shared Demo" -- still visible to everyone, matching the
+    # existing global/shared framing of that engine). No session
+    # (every pre-existing test/caller) -> unchanged, full history.
+    ctx = get_session_context(request, session)
+    if ctx is not None:
+        traces = [
+            trace
+            for trace in traces
+            if trace.event.organization_id is None
+            or trace.event.organization_id == ctx.organization_id
+        ]
+
+    return [EventTraceResponse.model_validate(trace) for trace in traces]
 
 
 # ---------------------------------------------------------------------------
@@ -1234,6 +1314,22 @@ def demo_update_customer(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Customer not found",
         )
+
+    # v3.5: session-aware org isolation + role enforcement. No session
+    # (every pre-existing test/caller) -> both checks are skipped, so
+    # behavior is byte-identical to before this version.
+    ctx = get_session_context(request, session)
+    if ctx is not None:
+        if profile.organization_id != ctx.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Customer not found",
+            )
+        if not has_permission(ctx.role, "customers.edit"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Role '{ctx.role}' cannot edit customers",
+            )
 
     before: dict[str, Any] = {
         "first_name": profile.first_name,
@@ -1283,14 +1379,20 @@ def demo_update_customer(
     else:
         event_type = "Customer Updated"
 
+    actor = ctx.user_name if ctx is not None else "Workspace User"
     audit = (
-        AuditEntry(actor="Workspace User", changes=changes, before=before, after=after)
+        AuditEntry(actor=actor, changes=changes, before=before, after=after)
         if changes
         else None
     )
 
     trace = ENGINE.record_customer_update(
-        customer_id, event_type, session=session, audit=audit
+        customer_id,
+        event_type,
+        session=session,
+        audit=audit,
+        organization_id=ctx.organization_id if ctx is not None else None,
+        triggered_by=ctx.user_name if ctx is not None else None,
     )
 
     return CustomerUpdateResponse(
@@ -1300,3 +1402,4 @@ def demo_update_customer(
 
 
 app.include_router(v1)
+app.include_router(tenancy_router)

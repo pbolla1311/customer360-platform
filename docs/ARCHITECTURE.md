@@ -247,3 +247,157 @@ customer id for direct/shared URLs and Global Search results. This is a
 simplification, not full router history: back/forward doesn't step
 through past selections, only the initial navigation and shareable-URL
 cases are handled.
+
+## Multi-Tenancy (v3.5)
+
+v3.5 turns the single-user workspace above into a real multi-tenant
+product: Organizations, Users, Roles, Memberships, Invitations, and API
+Keys, all as real SQLAlchemy models with a real migration -- not
+client-side fixtures. It is additive on top of every v2.0/v3.0 piece:
+`/customers`, `/api/v1/customers*`, and every existing test remain
+byte-for-byte unaffected, because every new behavior below is
+**session-gated** -- no session cookie present, and the code takes
+exactly the pre-v3.5 path.
+
+**Entity relationship diagram:**
+
+```mermaid
+erDiagram
+    ORGANIZATION ||--o{ MEMBERSHIP : has
+    ORGANIZATION ||--o{ INVITATION : sends
+    ORGANIZATION ||--o{ API_KEY : owns
+    ORGANIZATION ||--o{ CUSTOMER360_PROFILE : scopes
+    USER ||--o{ MEMBERSHIP : holds
+    USER ||--o{ INVITATION : "invited by (nullable)"
+
+    ORGANIZATION {
+        int id PK
+        string name
+        string slug UK
+        string logo_url "nullable"
+        string theme
+        datetime created_at
+    }
+    USER {
+        int id PK
+        string name
+        string email UK
+        string avatar_color
+        string status
+        datetime last_login_at "nullable"
+        datetime created_at
+    }
+    MEMBERSHIP {
+        int id PK
+        int user_id FK
+        int organization_id FK
+        string role "admin | operations | customer_success | executive | viewer"
+        datetime created_at
+    }
+    INVITATION {
+        int id PK
+        int organization_id FK
+        string email
+        string role
+        string status "pending | accepted | expired | revoked"
+        int invited_by_user_id FK "nullable"
+        datetime created_at
+        datetime expires_at
+        datetime accepted_at "nullable"
+    }
+    API_KEY {
+        int id PK
+        int organization_id FK
+        string name
+        string key_prefix
+        string hashed_key
+        string status "active | revoked"
+        datetime created_at
+        datetime last_used_at "nullable"
+    }
+    CUSTOMER360_PROFILE {
+        int id PK
+        int organization_id FK "nullable"
+        string customer_id UK
+    }
+```
+
+**Demo-tier session, not real auth.** `SessionMiddleware` (Starlette's
+built-in, signed-cookie, no server-side store) is added to `main.py` with
+`SESSION_SECRET_KEY` (env var, or a per-process random fallback -- fine
+since this is a demo convenience, not a security boundary). `POST
+/demo/api/auth/login` takes `{user_id}` -- there is deliberately no
+password or email-verification step, matching this app's existing
+"pick who you're signing in as" convention for demo/workspace routes.
+`customer360/tenancy/session.py`'s `get_session_context(request, db)`
+re-reads `User`/`Membership`/`Organization` from the database on every
+call (so a role change or org rename takes effect on the very next
+request) and returns `None` on any missing/invalid session -- the single
+optional dependency every session-aware endpoint below is built on.
+
+**Fixed roles, not a database table.** The spec's five roles are a
+closed set, not user-defined, so `customer360/tenancy/permissions.py`
+encodes them as a Python `StrEnum` plus two permission maps:
+`NAV_PERMISSIONS` (which roles may even see a given `/workspace` view)
+and `ACTIONS` (`customers.edit`, `pipeline.operate`,
+`organization.manage`, each a set of allowed roles). `has_permission`/
+`can_view` fail closed on any unknown role or key. The exact same maps
+are mirrored in `workspace.js` (`NAV_PERMISSIONS`, `canView`) for
+client-side nav hide/redirect -- the Python side is the enforcement
+boundary; the JS side is presentation only.
+
+**Org-scoping is additive at every call site it touches:**
+
+                GET /demo/api/customers
+                              │
+              session present?  ──No──►  repository.list_all()
+                              │                (unchanged, v1.1 behavior)
+                             Yes
+                              │
+              repository.list_by_organization(session.organization_id)
+                     (new method; list_all() itself never changed)
+
+`PATCH /demo/api/customers/{id}` gains the mirror-image check: 404 if a
+session exists and the customer's `organization_id` doesn't match it
+(org isolation), 403 if the session's role lacks `customers.edit`, and
+the `AuditEntry.actor` becomes the real signed-in user's name instead of
+the hardcoded `"Workspace User"` -- falling back to `"Workspace User"`
+when there's no session, so pre-v3.5 tests see identical output.
+`SimulatedEvent` gained two more defaulted fields, `organization_id` and
+`triggered_by`; only `record_customer_update()` threads them through, so
+Control Center actions (`generate`/`inject_failure`/`retry`/`recover`/
+`reset`) naturally keep `organization_id=None`/`triggered_by=None` --
+rendered as "Shared Demo" / "System" in the UI, an honest reflection
+that those really are anonymous, global, shared-state actions rather
+than per-user ones. `GET /demo/api/pipeline/history` filters to
+`event.organization_id == session.organization_id OR event.organization_id
+is None` only when a session exists, so shared Control Center events stay
+visible to everyone while real per-org customer events are isolated.
+
+**Management endpoints** (`customer360/api/tenancy_routes.py`, all under
+`/demo/api/*`, same unauthenticated-by-`X-API-Key` convention as the rest
+of that surface -- `/api/v1`'s real `verify_api_key` auth is untouched)
+cover auth (login/logout/session/switch-workspace), organization signup
+and branding, membership listing/role-change/removal, invitation
+send/accept/revoke, and API key generate/rotate/revoke/verify. Every
+mutation that isn't self-service (branding, membership changes,
+invitations, API keys) is gated by `require_permission("organization.
+manage")`, which only 403s when a session is present -- so this entire
+router is invisible to the pre-v3.5 test suite, which never sends a
+session cookie.
+
+**API keys are real but display-scoped.** `ApiKey` rows, generation
+(`sk_live_{32 random bytes}`, sha256-hashed at rest, shown in full
+exactly once), rotation, revocation, and `last_used_at` tracking are all
+real and backed by the database. `POST /demo/api/api-keys/verify`
+(header `X-Org-API-Key`) is the one place a key is actually checked --
+but `/api/v1`'s existing static-key auth is intentionally untouched, so
+these keys don't functionally gate anything outside `/demo/api/*` today.
+
+**Descoped, on purpose:** the spec's "user @mentions" and "task
+assignment" notifications have no underlying data model anywhere in this
+app (no comments/@mentions/task-assignment concept exists); rather than
+fabricate fake ones, only the real "Invitation accepted" notification
+type was added, derived from actual `Invitation.status` transitions,
+matching the "derive, don't fabricate" rule already applied to Orders/
+Uptime/Upcoming Tasks in v3.0.

@@ -1,5 +1,192 @@
 # Current Task
 
+## Task: Customer360 Cloud v3.5 — Multi-Tenant Enterprise SaaS
+
+**Branch:** `feature/customer360-cloud-v3.5` (created from `feature/customer360-cloud-v3`)
+**Status:** Complete
+**Started / Completed:** 2026-07-28
+
+### What shipped
+
+Turned the single-user workspace into a real multi-tenant SaaS product:
+Organizations, Users, Roles, Memberships, Invitations, and API Keys, all
+real database tables with a real migration. A demo-tier session login
+(`/login`, pick who you're signing in as — no password), a workspace
+switcher, role-based nav/action gating (5 fixed roles), organization-scoped
+customers/events, real audit "who," and Settings tabs for Organization/
+Users/Invitations/API Keys — layered entirely on the v2.0/v3.0 shell and
+existing backend, per the task's "do not rewrite" instruction. Every
+existing test still passes unmodified.
+
+### Key design decisions
+
+(See docs/ARCHITECTURE.md → "Multi-Tenancy (v3.5)" and README → "v3.5:
+multi-tenant Organizations, Users, Roles & API Keys" for the full
+reasoning and ERD.)
+
+Three scoping questions were confirmed with the user up front, all via
+the "Recommended" option:
+
+1. **Demo-tier session login**, not real password auth — a real signed
+   session cookie (Starlette's `SessionMiddleware`) over a real DB-backed
+   User/Organization/Membership, but no password/email verification.
+2. **API Keys are real but display-scoped** — real generate/rotate/
+   revoke/last-used tracking and one verify endpoint, but `/api/v1`'s
+   existing static-key auth is untouched.
+3. **Org-scoping limited to `/workspace` + `/demo/api/*`** — `/customers`
+   and `/api/v1/customers*` stay exactly as they are today, fully
+   org-agnostic; `customer360_profiles.organization_id` is nullable, and
+   a **new** `list_by_organization()` repository method does org-filtered
+   reads while `list_all()` is never touched.
+
+Further decisions made while implementing:
+
+1. **Fixed roles are a Python `StrEnum` + permission maps, not a DB
+   table** — the five roles are a closed set, not user-defined.
+   `has_permission`/`can_view` fail closed on any unknown role or key;
+   the same `NAV_PERMISSIONS` map is mirrored in `workspace.js` for
+   client-side nav hide/redirect, with the Python side as the real
+   enforcement boundary.
+2. **Every new behavior is session-gated, not role-gated-by-default** —
+   every org-scoping/permission check is `if session exists: enforce,
+   else: fall through to unchanged pre-v3.5 behavior`, verified by
+   dedicated regression tests asserting byte-identical output with no
+   session cookie.
+3. **`SimulatedEvent` gained two more defaulted fields**
+   (`organization_id`, `triggered_by`); only `record_customer_update()`
+   threads them through, so Control Center actions
+   (generate/failure/retry/recover/reset) naturally stay
+   `organization_id=None`/`triggered_by=None` — rendered as "Shared
+   Demo"/"System," an honest reflection that those are anonymous,
+   global, shared-state actions.
+4. **Circular import avoided** by extracting the shared slowapi
+   `Limiter` into its own `customer360/api/rate_limit.py`, imported by
+   both `main.py` and the new `tenancy_routes.py`.
+5. **Two-phase login for the "select workspace if multiple" requirement**
+   — `POST /demo/api/auth/login` always sets `session["user_id"]` and
+   auto-selects the organization if the user has exactly one membership;
+   with more than one, it returns `available_organizations` for the
+   frontend to render a picker that completes sign-in via
+   `switch-workspace`.
+6. **CSP struck again**: avatar colors can't be set via
+   `element.style.background` under this app's strict `style-src`
+   (JS style mutations are blocked exactly like inline `style=""`
+   attributes) — fixed with the same deterministic-hash-to-fixed-CSS-class
+   technique already used for `demo.js`'s illustrative timeline
+   (`avatarClassFor(seed)` → one of 5 palette classes).
+7. **Descoped, on purpose**: "user @mentions" and "task assignment"
+   notifications have no underlying data model anywhere in this app; only
+   the real "Invitation accepted" notification (from actual `Invitation`
+   status transitions) was added, matching the "derive, don't fabricate"
+   rule already applied to Orders/Uptime/Upcoming-Tasks in v3.0.
+
+### Files changed/added
+
+- `alembic/versions/41276a9b92f6_*.py` — new migration: `organizations`/
+  `users`/`memberships`/`invitations`/`api_keys` tables, nullable
+  `customer360_profiles.organization_id`, data-migration backfill into a
+  default "Demo Workspace" organization.
+- `customer360/tenancy/` (new package) — `models.py`, `repository.py`
+  (5 repositories), `permissions.py` (roles + permission maps),
+  `session.py` (`SessionContext`, `get_session_context`).
+- `customer360/api/rate_limit.py` (new) — shared slowapi `Limiter`.
+- `customer360/api/tenancy_routes.py` (new) — auth, organization,
+  membership, invitation, and API key endpoints under `/demo/api/*`.
+- `customer360/infrastructure/models.py` — side-effect import registering
+  tenancy tables on the shared `Base.metadata`; `organization_id` on
+  `Customer360Profile`.
+- `customer360/infrastructure/repository.py` — new
+  `list_by_organization()` method; `list_all()` untouched.
+- `customer360/api/pipeline_simulation_engine.py` — `SimulatedEvent`
+  gained `organization_id`/`triggered_by`; `record_customer_update()`
+  gained matching optional params.
+- `customer360/api/main.py` — `SessionMiddleware`, `tenancy_router`
+  mounted, `/login` route, org-scoped `demo_customers`/`demo_customer`/
+  `demo_update_customer`/`pipeline_history`, `_require_pipeline_permission`
+  gating inject-failure/retry/recover/reset.
+- `customer360/config.py` — `SESSION_SECRET_KEY`.
+- `customer360/api/static/login/` (new) — `index.html`, `login.css`,
+  `login.js` (sign-in, workspace picker, org signup).
+- `customer360/api/static/workspace/index.html` — workspace switcher,
+  sidebar user block, 5-tab Settings section (General/Organization/Users/
+  Invitations/API Keys), Event Center Organization + Triggered By columns,
+  Overview Active Users/Organizations/Pending Invitations KPI cards.
+- `customer360/api/static/workspace/workspace.js` — `NAV_PERMISSIONS`,
+  `canView`, `roleLabel`, `initialsFor`, `avatarClassFor`, session-gated
+  router kickoff (redirects to `/login`), workspace switcher, sidebar user
+  render + sign-out, Overview tenancy KPIs, `buildNotifications()` gained
+  an `invitations` param for "Invitation accepted."
+- `customer360/api/static/workspace/workspace-settings.js` (new) —
+  Settings tab switching, Organization branding form, Users table
+  (role-change/remove), Invitations form/table (send/revoke), API Keys
+  form/table (generate/rotate/revoke); relocated the reset-button +
+  system-status logic previously registered directly in `workspace.js`.
+- `customer360/api/static/workspace/workspace-pipeline.js` — Event Center
+  and Audit Logs Organization/Triggered By display.
+- `scripts/seed_demo_tenancy.py` (new) — idempotent, opt-in seed script
+  for demo organizations/users/memberships/invitations.
+- Tests: `tests/tenancy/test_repository.py` (21), `tests/api/
+  test_auth_session.py` (17, including no-session regression tests),
+  `tests/api/test_permissions.py` (12), `tests/api/test_invitations.py`
+  (10), `tests/api/test_login_js.py` (new, 7), `tests/api/
+  test_workspace_settings_js.py` (new, 7), `tests/api/test_workspace_js.py`
+  (+9 for `canView`/`roleLabel`/`initialsFor`/`avatarClassFor`/
+  invitation-notification cases).
+- Docs: `docs/ARCHITECTURE.md` new "Multi-Tenancy (v3.5)" section +
+  Mermaid ERD; `README.md` new v3.5 subsection + updated API/Data-Model
+  tables + Limitations; `CHANGELOG.md` new `[3.5.0]` entry.
+
+### Verified
+
+- `pytest -q`: **448 passed**, 0 failed (424 at session start + 24 new
+  Python + node-harness tests).
+- `alembic upgrade head` applied cleanly against the real local Postgres
+  dev database; verified idempotent re-run and data persistence across a
+  Docker Desktop restart mid-session.
+- `node --check` on every new/modified workspace JS file.
+- Manual curl-driven smoke test: logged in as an Admin, confirmed
+  org-scoped customer list, switched workspace, confirmed the list
+  changed; confirmed a Viewer-role session gets 403 on `PATCH` customer
+  and pipeline-operate actions; confirmed zero-session requests to
+  `/demo/api/customers` and `/demo/api/pipeline/history` are unaffected.
+- **One collision caught before it shipped**: `workspace.js` already had
+  a `Workspace.registerView("settings", ...)` call for the reset button +
+  system-status check; since `registerView()` does a plain overwrite (no
+  merging), it would have been silently discarded by
+  `workspace-settings.js`'s own registration. Fixed by relocating that
+  logic into `workspace-settings.js` and removing the old block from
+  `workspace.js` entirely.
+- **CSP violation caught proactively**: `login.js` originally set
+  `avatar.style.background` from `user.avatar_color` directly — blocked
+  by the strict `style-src` CSP. Replaced with a deterministic
+  hash-to-fixed-CSS-class mapping before it ever shipped.
+- **ARIA fix**: `role="listbox"` on the login page's user/workspace list
+  containers required `role="option"` children they didn't have; dropped
+  the `role` attribute since full listbox keyboard semantics weren't
+  being implemented.
+
+### Known limitations
+
+- Same global-engine caveat as v1.2/v2.0/v3.0 (Control Center state is
+  process-wide, not per-session).
+- The demo-tier session is not real authentication (no password, no
+  MFA, no server-side revocation) — an intentional, documented scope
+  choice, not an oversight.
+- No email is ever sent for invitations; acceptance happens via a direct
+  API call.
+- Org-scoping does not extend to `/customers`/`/api/v1/customers*` —
+  confirmed as in-scope for a future task, not this one.
+- API Keys don't functionally gate `/api/v1` — display/verify-scoped only.
+- "User mentions" and "task assignment" notifications were descoped —
+  no underlying data model exists for either.
+- No screenshot checklist added for the v3.5 UI changes (same standing
+  gap noted for prior tasks' pages).
+- The `test_workspace_*_js.py`/`test_login_js.py`/`test_demo_js.py`/
+  `test_pipeline_js.py` files still aren't wired into the CI `quality`
+  job — flagged after every prior task too, still not done.
+
+---
+
 ## Task: Customer360 Cloud v3.0 — Enterprise Customer Data Platform
 
 **Branch:** `feature/customer360-cloud-v3` (created from `feature/customer360-cloud-v2`)

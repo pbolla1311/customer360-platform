@@ -115,6 +115,14 @@ class SimulatedEvent:
     status: EventStatus
     retry_count: int = 0
     failure_type: FailureType | None = None
+    # v3.5 multi-tenancy: only ever set by record_customer_update() for a
+    # real, session-backed customer edit. Control Center demo actions
+    # (generate_event/inject_failure/retry_failed_event) never set these,
+    # so they stay None -- an honest reflection that those really are
+    # anonymous, global, shared-state actions, not tied to any one
+    # organization or user. Rendered as "System" / "Shared Demo" in the UI.
+    organization_id: int | None = None
+    triggered_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -388,6 +396,8 @@ class PipelineSimulationEngine:
         event_type: str,
         session: Session | None = None,
         audit: AuditEntry | None = None,
+        organization_id: int | None = None,
+        triggered_by: str | None = None,
     ) -> EventTrace:
         """Called when a real customer edit is saved. Unlike generate_event
         (which cycles through EVENT_TYPES/synthetic customer ids for the
@@ -397,7 +407,9 @@ class PipelineSimulationEngine:
         Center action) and never fabricates a customer_id or event_type.
         `audit`, when supplied by the caller (see main.py), is attached to
         the trace as-is -- this engine never computes the before/after
-        diff itself, since it has no notion of "customer fields"."""
+        diff itself, since it has no notion of "customer fields". Likewise
+        `organization_id`/`triggered_by` (v3.5) are passed straight
+        through from the caller's session context, never derived here."""
 
         with self._lock:
             self._sequence += 1
@@ -410,6 +422,8 @@ class PipelineSimulationEngine:
                 customer_id=customer_id,
                 created_at=now,
                 status=EventStatus.SUCCESS,
+                organization_id=organization_id,
+                triggered_by=triggered_by,
             )
             trace = EventTrace(event=event, steps=_happy_path_steps(now), audit=audit)
 
