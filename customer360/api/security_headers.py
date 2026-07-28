@@ -21,26 +21,20 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
 
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = (
-            "camera=(), microphone=(), geolocation=()"
-        )
+             "camera=(), microphone=(), geolocation=()"
+)
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self'; "
-            f"style-src 'self' 'nonce-{request.state.csp_nonce}'; "
-            # The landing page's GitHub stats widget fetches repo/release
-            # metadata client-side from the public GitHub REST API (no
-            # token, CORS-enabled). This is the one explicit exception to
-            # same-origin-only network access; it does not touch
-            # script-src/style-src, so it adds no path to inline or
-            # third-party code execution.
+             "default-src 'self'; "
+             "script-src 'self'; "
+             f"style-src 'self' 'nonce-{request.state.csp_nonce}'; "
             "connect-src 'self' https://api.github.com; "
-            "frame-ancestors 'none'; "
+            "frame-ancestors 'self'; "
             "base-uri 'self'; "
             "form-action 'self'"
-        )
+)
         response.headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains"
         )
