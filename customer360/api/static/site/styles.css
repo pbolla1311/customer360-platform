@@ -1,18 +1,6 @@
-:root {
-  --bg-0: #05070a;
-  --bg-1: #0a0e14;
-  --bg-2: #0d1219;
-  --accent-blue: #3b82f6;
-  --accent-cyan: #22d3ee;
-  --text-primary: #f3f6fa;
-  --text-secondary: #b6c0cc;
-  --text-muted: #8b96a5;
-  --text-dim: #5b6675;
-  --border: rgba(255, 255, 255, 0.09);
-  --card-bg: rgba(255, 255, 255, 0.03);
-  --ok: #34d399;
-  --down: #f87171;
-}
+/* Color tokens now live in /static/shared/design-system.css, loaded
+   before this file -- see that file for the canonical :root
+   definitions (bg-0/1/2, accent-*, text-*, ok/down, border, card-bg). */
 
 * {
   margin: 0;
@@ -601,6 +589,114 @@ section {
 .feature-card p {
   font-size: 14px;
   color: var(--text-muted);
+}
+
+/* ---------- Product overview ---------- */
+
+.overview-copy {
+  max-width: 760px;
+  margin: 0 auto;
+  text-align: center;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.overview-copy p + p {
+  margin-top: 14px;
+}
+
+/* ---------- Customer lifecycle ---------- */
+
+.lifecycle-steps {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: stretch;
+  gap: 16px;
+}
+
+.lifecycle-step {
+  flex: 1;
+  min-width: 150px;
+  max-width: 190px;
+  text-align: center;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  padding: 20px 14px;
+}
+
+.lifecycle-step-number {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+  color: var(--bg-0);
+  font-weight: 800;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 12px;
+}
+
+.lifecycle-step h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.lifecycle-step p {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.lifecycle-arrow {
+  display: flex;
+  align-items: center;
+  color: var(--text-dim);
+  font-size: 18px;
+}
+
+@media (max-width: 900px) {
+  .lifecycle-arrow {
+    display: none;
+  }
+}
+
+/* ---------- Open source ---------- */
+
+.opensource-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  padding: 28px;
+}
+
+.opensource-body h3 {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.opensource-body p {
+  font-size: 14px;
+  color: var(--text-muted);
+  max-width: 520px;
+}
+
+.opensource-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 /* ---------- Footer ---------- */

@@ -107,21 +107,45 @@
     var systemStatusEl = document.getElementById("ws-system-status");
     var systemStatusLoaded = false;
 
+    function runSimulationReset() {
+      settingsResetBtn.disabled = true;
+      postJson("/demo/api/pipeline/reset")
+        .then(function () {
+          settingsResetStatus.textContent = "Simulation data reset.";
+          settingsResetStatus.className = "ws-edit-status ws-edit-status--ok";
+          if (window.UI) {
+            window.UI.toast("Simulation data reset.", { type: "success" });
+          }
+        })
+        .catch(function (err) {
+          var message = (err && err.message) || "Couldn't reset simulation data.";
+          settingsResetStatus.textContent = message;
+          settingsResetStatus.className = "ws-edit-status ws-edit-status--error";
+          if (window.UI) {
+            window.UI.toast(message, { type: "error" });
+          }
+        })
+        .then(function () {
+          settingsResetBtn.disabled = false;
+        });
+    }
+
     if (settingsResetBtn) {
       settingsResetBtn.addEventListener("click", function () {
-        settingsResetBtn.disabled = true;
-        postJson("/demo/api/pipeline/reset")
-          .then(function () {
-            settingsResetStatus.textContent = "Simulation data reset.";
-            settingsResetStatus.className = "ws-edit-status ws-edit-status--ok";
-          })
-          .catch(function (err) {
-            settingsResetStatus.textContent = (err && err.message) || "Couldn't reset simulation data.";
-            settingsResetStatus.className = "ws-edit-status ws-edit-status--error";
-          })
-          .then(function () {
-            settingsResetBtn.disabled = false;
-          });
+        if (!window.UI) {
+          runSimulationReset();
+          return;
+        }
+        window.UI.confirm({
+          title: "Reset all simulation data?",
+          body: "This clears every Control Center event, retry, and DLQ entry shared by everyone currently viewing the demo. This cannot be undone.",
+          confirmLabel: "Reset Simulation Data",
+          danger: true,
+        }).then(function (confirmed) {
+          if (confirmed) {
+            runSimulationReset();
+          }
+        });
       });
     }
 
@@ -184,10 +208,17 @@
           .then(function () {
             orgStatus.textContent = "Branding saved.";
             orgStatus.className = "ws-edit-status ws-edit-status--ok";
+            if (window.UI) {
+              window.UI.toast("Organization branding saved.", { type: "success" });
+            }
           })
           .catch(function (err) {
-            orgStatus.textContent = (err && err.message) || "Couldn't save branding.";
+            var message = (err && err.message) || "Couldn't save branding.";
+            orgStatus.textContent = message;
             orgStatus.className = "ws-edit-status ws-edit-status--error";
+            if (window.UI) {
+              window.UI.toast(message, { type: "error" });
+            }
           });
       });
     }
@@ -197,17 +228,30 @@
     var usersBody = document.getElementById("settings-users-body");
 
     function renderUsers(members) {
-      usersBody.textContent = "";
       if (members.length === 0) {
-        var row = document.createElement("tr");
-        var cell = document.createElement("td");
-        cell.colSpan = 5;
-        cell.className = "ws-empty-hint";
-        cell.textContent = "No members yet.";
-        row.appendChild(cell);
-        usersBody.appendChild(row);
+        if (window.UI) {
+          window.UI.emptyStateRow(usersBody, 5, {
+            icon: "👥",
+            title: "No team members yet",
+            description: "Invite a teammate from the Invitations tab to start building this organization.",
+            actionLabel: "Go to Invitations",
+            onAction: function () {
+              activateSettingsTab("invitations");
+            },
+          });
+        } else {
+          usersBody.textContent = "";
+          var row = document.createElement("tr");
+          var cell = document.createElement("td");
+          cell.colSpan = 5;
+          cell.className = "ws-empty-hint";
+          cell.textContent = "No members yet.";
+          row.appendChild(cell);
+          usersBody.appendChild(row);
+        }
         return;
       }
+      usersBody.textContent = "";
 
       var nowMs = Date.now();
       members.forEach(function (member) {
@@ -230,9 +274,20 @@
         roleSelect.addEventListener("change", function () {
           patchJson("/demo/api/memberships/" + member.membership_id, {
             role: roleSelect.value,
-          }).catch(function () {
-            roleSelect.value = member.role;
-          });
+          })
+            .then(function () {
+              if (window.UI) {
+                window.UI.toast(member.name + "'s role updated to " + roleLabel(roleSelect.value) + ".", {
+                  type: "success",
+                });
+              }
+            })
+            .catch(function (err) {
+              roleSelect.value = member.role;
+              if (window.UI) {
+                window.UI.toast((err && err.message) || "Couldn't update role.", { type: "error" });
+              }
+            });
         });
         roleTd.appendChild(roleSelect);
         tr.appendChild(roleTd);
@@ -253,8 +308,33 @@
         removeBtn.className = "btn btn-secondary";
         removeBtn.textContent = "Remove";
         removeBtn.addEventListener("click", function () {
-          fetch("/demo/api/memberships/" + member.membership_id, { method: "DELETE" }).then(function () {
-            loadUsers(true);
+          var doRemove = function () {
+            fetch("/demo/api/memberships/" + member.membership_id, { method: "DELETE" })
+              .then(function () {
+                loadUsers(true);
+                if (window.UI) {
+                  window.UI.toast(member.name + " removed from this organization.", { type: "success" });
+                }
+              })
+              .catch(function () {
+                if (window.UI) {
+                  window.UI.toast("Couldn't remove this member.", { type: "error" });
+                }
+              });
+          };
+          if (!window.UI) {
+            doRemove();
+            return;
+          }
+          window.UI.confirm({
+            title: "Remove this member?",
+            body: member.name + " (" + member.email + ") will lose access to this organization.",
+            confirmLabel: "Remove Member",
+            danger: true,
+          }).then(function (confirmed) {
+            if (confirmed) {
+              doRemove();
+            }
           });
         });
         actionsTd.appendChild(removeBtn);
@@ -282,17 +362,26 @@
     var invitationsBody = document.getElementById("invitations-body");
 
     function renderInvitations(invitations) {
-      invitationsBody.textContent = "";
       if (invitations.length === 0) {
-        var row = document.createElement("tr");
-        var cell = document.createElement("td");
-        cell.colSpan = 6;
-        cell.className = "ws-empty-hint";
-        cell.textContent = "No invitations yet.";
-        row.appendChild(cell);
-        invitationsBody.appendChild(row);
+        if (window.UI) {
+          window.UI.emptyStateRow(invitationsBody, 6, {
+            icon: "✉️",
+            title: "No invitations sent yet",
+            description: "Use the form above to invite a teammate to this organization.",
+          });
+        } else {
+          invitationsBody.textContent = "";
+          var row = document.createElement("tr");
+          var cell = document.createElement("td");
+          cell.colSpan = 6;
+          cell.className = "ws-empty-hint";
+          cell.textContent = "No invitations yet.";
+          row.appendChild(cell);
+          invitationsBody.appendChild(row);
+        }
         return;
       }
+      invitationsBody.textContent = "";
 
       var nowMs = Date.now();
       invitations.forEach(function (invitation) {
@@ -326,8 +415,33 @@
           revokeBtn.className = "btn btn-secondary";
           revokeBtn.textContent = "Revoke";
           revokeBtn.addEventListener("click", function () {
-            postJson("/demo/api/invitations/" + invitation.id + "/revoke").then(function () {
-              loadInvitations();
+            var doRevoke = function () {
+              postJson("/demo/api/invitations/" + invitation.id + "/revoke")
+                .then(function () {
+                  loadInvitations();
+                  if (window.UI) {
+                    window.UI.toast("Invitation to " + invitation.email + " revoked.", { type: "success" });
+                  }
+                })
+                .catch(function () {
+                  if (window.UI) {
+                    window.UI.toast("Couldn't revoke this invitation.", { type: "error" });
+                  }
+                });
+            };
+            if (!window.UI) {
+              doRevoke();
+              return;
+            }
+            window.UI.confirm({
+              title: "Revoke this invitation?",
+              body: invitation.email + " will no longer be able to accept this invitation.",
+              confirmLabel: "Revoke Invitation",
+              danger: true,
+            }).then(function (confirmed) {
+              if (confirmed) {
+                doRevoke();
+              }
             });
           });
           actionsTd.appendChild(revokeBtn);
@@ -364,12 +478,19 @@
           .then(function () {
             inviteStatus.textContent = "Invitation sent.";
             inviteStatus.className = "ws-edit-status ws-edit-status--ok";
+            if (window.UI) {
+              window.UI.toast("Invitation sent to " + inviteEmailInput.value + ".", { type: "success" });
+            }
             inviteEmailInput.value = "";
             loadInvitations();
           })
           .catch(function (err) {
-            inviteStatus.textContent = (err && err.message) || "Couldn't send invitation.";
+            var message = (err && err.message) || "Couldn't send invitation.";
+            inviteStatus.textContent = message;
             inviteStatus.className = "ws-edit-status ws-edit-status--error";
+            if (window.UI) {
+              window.UI.toast(message, { type: "error" });
+            }
           });
       });
     }
@@ -383,17 +504,26 @@
     var apiKeysBody = document.getElementById("apikeys-body");
 
     function renderApiKeys(keys) {
-      apiKeysBody.textContent = "";
       if (keys.length === 0) {
-        var row = document.createElement("tr");
-        var cell = document.createElement("td");
-        cell.colSpan = 5;
-        cell.className = "ws-empty-hint";
-        cell.textContent = "No API keys yet.";
-        row.appendChild(cell);
-        apiKeysBody.appendChild(row);
+        if (window.UI) {
+          window.UI.emptyStateRow(apiKeysBody, 5, {
+            icon: "🔑",
+            title: "No API keys yet",
+            description: "Generate a key above to authenticate programmatic access to this organization.",
+          });
+        } else {
+          apiKeysBody.textContent = "";
+          var row = document.createElement("tr");
+          var cell = document.createElement("td");
+          cell.colSpan = 5;
+          cell.className = "ws-empty-hint";
+          cell.textContent = "No API keys yet.";
+          row.appendChild(cell);
+          apiKeysBody.appendChild(row);
+        }
         return;
       }
+      apiKeysBody.textContent = "";
 
       var nowMs = Date.now();
       keys.forEach(function (key) {
@@ -425,18 +555,52 @@
           rotateBtn.className = "btn btn-secondary";
           rotateBtn.textContent = "Rotate";
           rotateBtn.addEventListener("click", function () {
-            postJson("/demo/api/api-keys/" + key.id + "/rotate").then(function (result) {
-              revealKey(result.full_key);
-              loadApiKeys();
-            });
+            postJson("/demo/api/api-keys/" + key.id + "/rotate")
+              .then(function (result) {
+                revealKey(result.full_key);
+                loadApiKeys();
+                if (window.UI) {
+                  window.UI.toast("API key rotated. Copy the new key now.", { type: "success" });
+                }
+              })
+              .catch(function () {
+                if (window.UI) {
+                  window.UI.toast("Couldn't rotate this key.", { type: "error" });
+                }
+              });
           });
           var revokeBtn = document.createElement("button");
           revokeBtn.type = "button";
           revokeBtn.className = "btn btn-secondary";
           revokeBtn.textContent = "Revoke";
           revokeBtn.addEventListener("click", function () {
-            postJson("/demo/api/api-keys/" + key.id + "/revoke").then(function () {
-              loadApiKeys();
+            var doRevoke = function () {
+              postJson("/demo/api/api-keys/" + key.id + "/revoke")
+                .then(function () {
+                  loadApiKeys();
+                  if (window.UI) {
+                    window.UI.toast("API key \"" + key.name + "\" revoked.", { type: "success" });
+                  }
+                })
+                .catch(function () {
+                  if (window.UI) {
+                    window.UI.toast("Couldn't revoke this key.", { type: "error" });
+                  }
+                });
+            };
+            if (!window.UI) {
+              doRevoke();
+              return;
+            }
+            window.UI.confirm({
+              title: "Revoke this API key?",
+              body: "\"" + key.name + "\" (" + key.key_prefix + ") will stop working immediately.",
+              confirmLabel: "Revoke API Key",
+              danger: true,
+            }).then(function (confirmed) {
+              if (confirmed) {
+                doRevoke();
+              }
             });
           });
           actionsTd.appendChild(rotateBtn);
@@ -480,13 +644,20 @@
           .then(function (result) {
             apiKeyStatus.textContent = "Key generated.";
             apiKeyStatus.className = "ws-edit-status ws-edit-status--ok";
+            if (window.UI) {
+              window.UI.toast("API key generated. Copy it now.", { type: "success" });
+            }
             apiKeyNameInput.value = "";
             revealKey(result.full_key);
             loadApiKeys();
           })
           .catch(function (err) {
-            apiKeyStatus.textContent = (err && err.message) || "Couldn't generate key.";
+            var message = (err && err.message) || "Couldn't generate key.";
+            apiKeyStatus.textContent = message;
             apiKeyStatus.className = "ws-edit-status ws-edit-status--error";
+            if (window.UI) {
+              window.UI.toast(message, { type: "error" });
+            }
           });
       });
     }

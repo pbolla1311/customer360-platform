@@ -1,19 +1,7 @@
-:root {
-  --bg-0: #05070a;
-  --bg-1: #0a0e14;
-  --bg-2: #0d1219;
-  --accent-blue: #3b82f6;
-  --accent-cyan: #22d3ee;
-  --text-primary: #f3f6fa;
-  --text-secondary: #b6c0cc;
-  --text-muted: #8b96a5;
-  --text-dim: #5b6675;
-  --border: rgba(255, 255, 255, 0.09);
-  --card-bg: rgba(255, 255, 255, 0.03);
-  --ok: #34d399;
-  --down: #f87171;
-  --sample: #fbbf24;
-}
+/* Color tokens now live in /static/shared/design-system.css, loaded
+   before this file on every page -- see that file for the canonical
+   :root definitions (bg-0/1/2, accent-*, text-*, ok/warn/critical/down/
+   sample, border, card-bg). */
 
 * {
   margin: 0;

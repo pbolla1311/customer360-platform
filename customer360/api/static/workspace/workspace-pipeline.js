@@ -326,13 +326,39 @@
         type: "line",
         data: { labels: categories, datasets: datasets },
         options: {
-          animation: { duration: 400 },
+          animation: { duration: 450, easing: "easeOutQuart" },
           responsive: true,
+          interaction: { mode: "index", intersect: false },
+          layout: { padding: { top: 8, right: 8, bottom: 0, left: 0 } },
           scales: {
-            x: { ticks: { color: "#8b96a5", maxTicksLimit: 6 }, grid: { color: "rgba(255,255,255,0.05)" } },
-            y: { ticks: { color: "#8b96a5" }, grid: { color: "rgba(255,255,255,0.05)" }, beginAtZero: true },
+            x: {
+              ticks: { color: "#8b96a5", maxTicksLimit: 6 },
+              grid: { color: "rgba(255,255,255,0.05)" },
+            },
+            y: {
+              ticks: { color: "#8b96a5", padding: 8 },
+              grid: { color: "rgba(255,255,255,0.05)" },
+              beginAtZero: true,
+            },
           },
-          plugins: { legend: { labels: { color: "#b6c0cc" } } },
+          plugins: {
+            legend: {
+              position: "top",
+              align: "end",
+              labels: { color: "#b6c0cc", usePointStyle: true, boxWidth: 8, padding: 16 },
+            },
+            tooltip: {
+              backgroundColor: "#0d1219",
+              borderColor: "rgba(255,255,255,0.09)",
+              borderWidth: 1,
+              titleColor: "#f3f6fa",
+              bodyColor: "#b6c0cc",
+              padding: 10,
+              cornerRadius: 8,
+              displayColors: true,
+              boxPadding: 4,
+            },
+          },
         },
       });
     }

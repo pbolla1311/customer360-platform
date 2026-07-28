@@ -1,22 +1,7 @@
-:root {
-  --bg-0: #05070a;
-  --bg-1: #0a0e14;
-  --bg-2: #0d1219;
-  --accent-blue: #3b82f6;
-  --accent-cyan: #22d3ee;
-  --accent-violet: #a78bfa;
-  --text-primary: #f3f6fa;
-  --text-secondary: #b6c0cc;
-  --text-muted: #8b96a5;
-  --text-dim: #5b6675;
-  --border: rgba(255, 255, 255, 0.09);
-  --card-bg: rgba(255, 255, 255, 0.03);
-  --glass-bg: rgba(18, 22, 30, 0.55);
-  --ok: #34d399;
-  --warn: #fbbf24;
-  --critical: #f87171;
-  --sample: #fbbf24;
-}
+/* Color tokens now live in /static/shared/design-system.css, loaded
+   before this file on every page -- see that file for the canonical
+   :root definitions (bg-0/1/2, accent-*, text-*, ok/warn/critical/down/
+   sample, border, card-bg, glass-bg). */
 
 * {
   margin: 0;
@@ -482,22 +467,25 @@ select:focus-visible,
 }
 
 .stage-node--active {
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .stage-node--active-ok {
   border-color: var(--ok);
   box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.5), 0 0 18px rgba(52, 211, 153, 0.25);
+  transform: translateY(-2px);
 }
 
 .stage-node--active-pending {
   border-color: var(--warn);
   box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.5), 0 0 18px rgba(251, 191, 36, 0.25);
+  transform: translateY(-2px);
 }
 
 .stage-node--active-failed {
   border-color: var(--critical);
   box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.55), 0 0 18px rgba(248, 113, 113, 0.3);
+  transform: translateY(-2px);
 }
 
 .stage-connector {
@@ -788,5 +776,11 @@ select:focus-visible,
   .stage-connector,
   .stage-dot--critical {
     animation: none !important;
+  }
+
+  .stage-node--active-ok,
+  .stage-node--active-pending,
+  .stage-node--active-failed {
+    transform: none;
   }
 }

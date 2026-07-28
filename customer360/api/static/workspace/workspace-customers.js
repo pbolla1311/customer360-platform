@@ -719,13 +719,7 @@
       state.history.unshift(result.trace);
     }
 
-    els.archiveToggle.addEventListener("click", function () {
-      var customer = CustomersLogic.findCustomerById(state.customers, state.selectedId);
-      if (!customer) {
-        return;
-      }
-
-      var nextStatus = (customer.status || "active") === "archived" ? "active" : "archived";
+    function runArchiveToggle(customer, nextStatus) {
       els.archiveToggle.disabled = true;
       els.archiveStatus.textContent = nextStatus === "archived" ? "Archiving…" : "Restoring…";
       els.archiveStatus.className = "ws-edit-status";
@@ -738,14 +732,55 @@
           els.archiveStatus.textContent =
             result.trace.event.event_type + " → " + result.trace.event.event_id + " (delivered).";
           els.archiveStatus.className = "ws-edit-status ws-edit-status--ok";
+          if (window.UI) {
+            window.UI.toast(
+              nextStatus === "archived" ? "Customer archived." : "Customer restored.",
+              { type: "success" }
+            );
+          }
         })
         .catch(function (err) {
-          els.archiveStatus.textContent = (err && err.message) || "Couldn't update this customer right now.";
+          var message = (err && err.message) || "Couldn't update this customer right now.";
+          els.archiveStatus.textContent = message;
           els.archiveStatus.className = "ws-edit-status ws-edit-status--error";
+          if (window.UI) {
+            window.UI.toast(message, { type: "error" });
+          }
         })
         .then(function () {
           els.archiveToggle.disabled = false;
         });
+    }
+
+    els.archiveToggle.addEventListener("click", function () {
+      var customer = CustomersLogic.findCustomerById(state.customers, state.selectedId);
+      if (!customer) {
+        return;
+      }
+
+      var nextStatus = (customer.status || "active") === "archived" ? "active" : "archived";
+
+      if (nextStatus === "archived" && window.UI) {
+        window.UI.confirm({
+          title: "Archive this customer?",
+          body:
+            customer.first_name +
+            " " +
+            customer.last_name +
+            " (" +
+            customer.customer_id +
+            ") will be marked archived. You can restore them at any time.",
+          confirmLabel: "Archive Customer",
+          danger: true,
+        }).then(function (confirmed) {
+          if (confirmed) {
+            runArchiveToggle(customer, nextStatus);
+          }
+        });
+        return;
+      }
+
+      runArchiveToggle(customer, nextStatus);
     });
 
     els.editForm.addEventListener("submit", function (event) {

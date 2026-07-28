@@ -402,7 +402,7 @@ SWAGGER_UI_HTML = f"""\
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link type="text/css" rel="stylesheet" href="/static/swagger/swagger-ui.css">
-<link rel="shortcut icon" href="/static/swagger/favicon.png">
+<link rel="icon" type="image/svg+xml" href="/static/shared/brand/favicon.svg">
 <title>{API_TITLE} - Swagger UI</title>
 </head>
 <body>
@@ -424,7 +424,7 @@ def _redoc_html(nonce: str) -> str:
 <title>{API_TITLE} - ReDoc</title>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="shortcut icon" href="/static/swagger/favicon.png">
+<link rel="icon" type="image/svg+xml" href="/static/shared/brand/favicon.svg">
 <link rel="stylesheet" href="/static/redoc/redoc.css">
 </head>
 <body>

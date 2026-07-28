@@ -554,8 +554,8 @@ body {
   border: 1px solid var(--border);
   border-radius: 9px;
   color: var(--text-primary);
-  font-size: 13px;
-  padding: 9px 10px;
+  font-size: 14px;
+  padding: 9px 11px;
 }
 
 .ws-pagination {
@@ -667,7 +667,47 @@ body {
   border-radius: 9px;
   color: var(--text-primary);
   font-size: 13.5px;
-  padding: 9px 12px;
+  padding: 9px 30px 9px 12px;
+}
+
+.ws-search-shortcut-hint {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-family: inherit;
+  pointer-events: none;
+}
+
+.ws-topbar-search input:focus + .ws-search-shortcut-hint {
+  display: none;
+}
+
+.ws-search-highlight {
+  background: rgba(34, 211, 238, 0.25);
+  color: var(--text-primary);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.ws-search-result--recent {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  font: inherit;
+  cursor: pointer;
 }
 
 .ws-search-results {
@@ -681,7 +721,7 @@ body {
   border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--bg-1);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-lg);
   padding: 6px;
 }
 
@@ -752,14 +792,70 @@ body {
   top: calc(100% + 8px);
   right: 0;
   z-index: 20;
-  width: 320px;
+  width: min(320px, calc(100vw - 32px));
   max-height: 400px;
   overflow-y: auto;
   border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--bg-1);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-lg);
   padding: 12px;
+  transform-origin: top right;
+  transition: opacity var(--transition-base), transform var(--transition-base);
+}
+
+/* Overrides the generic `.is-hidden { display: none !important; }` utility
+   (higher specificity wins even against !important) so this dropdown
+   fades/scales out instead of disappearing instantly. */
+.ws-notif-dropdown.is-hidden {
+  display: block !important;
+  opacity: 0;
+  transform: scale(0.97) translateY(-4px);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-notif-dropdown {
+    transition: none;
+  }
+}
+
+.ws-activity-list li.ws-notif-item {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  position: relative;
+}
+
+.ws-notif-item-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.ws-notif-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ws-notif-unread-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-cyan);
+  margin-top: 5px;
+}
+
+/* Resets the box styling `.ws-activity-list li` applies by default, since
+   the Today/Earlier group labels are plain section headers, not cards. */
+.ws-activity-list li.ws-notif-group-label {
+  border: none;
+  background: none;
+  padding: 8px 4px 4px;
 }
 
 .ws-notif-heading {
@@ -777,38 +873,9 @@ body {
 
 /* ---------- v3.5: multi-tenancy (workspace switcher, sidebar user, avatars) ---------- */
 
-.login-user-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 800;
-  color: var(--bg-0);
-}
-
-.login-user-avatar--blue {
-  background: #3b82f6;
-}
-
-.login-user-avatar--cyan {
-  background: #22d3ee;
-}
-
-.login-user-avatar--violet {
-  background: #a78bfa;
-}
-
-.login-user-avatar--green {
-  background: #34d399;
-}
-
-.login-user-avatar--amber {
-  background: #fbbf24;
-}
+/* .login-user-avatar and its color modifiers now live in
+   /static/shared/design-system.css (loaded before this file), so they
+   render identically here and on /login without duplication. */
 
 .ws-workspace-switcher {
   position: relative;
@@ -850,10 +917,25 @@ body {
   border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--bg-1);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-lg);
   padding: 6px;
   max-height: 280px;
   overflow-y: auto;
+  transform-origin: top left;
+  transition: opacity var(--transition-base), transform var(--transition-base);
+}
+
+.ws-workspace-dropdown.is-hidden {
+  display: block !important;
+  opacity: 0;
+  transform: scale(0.97) translateY(-4px);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-workspace-dropdown {
+    transition: none;
+  }
 }
 
 .ws-workspace-option {

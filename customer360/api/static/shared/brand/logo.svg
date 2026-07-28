@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 72" role="img" aria-label="Customer360 Cloud">
+  <defs>
+    <linearGradient id="c360-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="4" width="64" height="64" rx="18" fill="url(#c360-logo-grad)"/>
+  <text x="32" y="47" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-weight="800" font-size="34" fill="#05070a">C</text>
+  <text x="80" y="34" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-weight="800" font-size="26" fill="#f3f6fa">Customer360</text>
+  <text x="80" y="57" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-weight="600" font-size="17" letter-spacing="2" fill="#22d3ee">CLOUD</text>
+</svg>

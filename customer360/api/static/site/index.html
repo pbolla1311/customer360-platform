@@ -5,7 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>{{APP_TITLE}} — Enterprise Backend &amp; Data Engineering</title>
 <meta name="description" content="A production-style customer data platform demonstrating backend architecture, event-driven data engineering, and secure API design."/>
-<link rel="shortcut icon" href="/static/swagger/favicon.png"/>
+<meta property="og:type" content="website"/>
+<meta property="og:title" content="Customer360 Platform — Enterprise Backend &amp; Data Engineering"/>
+<meta property="og:description" content="A production-style customer data platform demonstrating backend architecture, event-driven data engineering, and secure API design."/>
+<meta property="og:image" content="https://customer360-platform-production.up.railway.app/static/site/social-preview.png"/>
+<meta property="og:url" content="https://customer360-platform-production.up.railway.app/"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="Customer360 Platform — Enterprise Backend &amp; Data Engineering"/>
+<meta name="twitter:description" content="A production-style customer data platform demonstrating backend architecture, event-driven data engineering, and secure API design."/>
+<meta name="twitter:image" content="https://customer360-platform-production.up.railway.app/static/site/social-preview.png"/>
+<link rel="icon" type="image/svg+xml" href="/static/shared/brand/favicon.svg"/>
+<link rel="stylesheet" href="/static/shared/design-system.css"/>
 <link rel="stylesheet" href="/static/site/styles.css"/>
 </head>
 <body>
@@ -97,6 +107,67 @@
           <span class="stat-label">Latest Release</span>
           <span class="stat-value" id="stat-release">—</span>
         </span>
+      </div>
+    </section>
+
+    <section id="overview">
+      <div class="section-heading">
+        <h2>Product Overview</h2>
+        <p>One backend, three ways to experience it.</p>
+      </div>
+      <div class="overview-copy">
+        <p>
+          Customer360 Cloud is a unified SaaS workspace — sign in, pick an
+          organization, and manage the customer lifecycle end to end:
+          create, edit, archive, and restore customer records, all backed
+          by the same versioned FastAPI service and PostgreSQL database
+          documented below.
+        </p>
+        <p>
+          Every action in the workspace is real: editing a customer writes
+          to the database and produces a genuine event that flows through
+          the Event Center, Pipeline, Monitoring, Analytics, and Audit Logs
+          — the same continuous story a production operations console
+          would tell, not a static mockup.
+        </p>
+      </div>
+    </section>
+
+    <section id="lifecycle">
+      <div class="section-heading">
+        <h2>Customer Lifecycle</h2>
+        <p>One customer record, five real actions, all inside <a href="/workspace">/workspace</a>.</p>
+      </div>
+      <div class="lifecycle-steps">
+        <div class="lifecycle-step">
+          <div class="lifecycle-step-number">1</div>
+          <h3>Create</h3>
+          <p>Seed or sign up an organization with its first customer records.</p>
+        </div>
+        <div class="lifecycle-arrow" aria-hidden="true">→</div>
+        <div class="lifecycle-step">
+          <div class="lifecycle-step-number">2</div>
+          <h3>Edit</h3>
+          <p>Update a profile — the write lands in PostgreSQL and produces a real event.</p>
+        </div>
+        <div class="lifecycle-arrow" aria-hidden="true">→</div>
+        <div class="lifecycle-step">
+          <div class="lifecycle-step-number">3</div>
+          <h3>Archive</h3>
+          <p>Retire a customer without deleting history — reversible, fully audited.</p>
+        </div>
+        <div class="lifecycle-arrow" aria-hidden="true">→</div>
+        <div class="lifecycle-step">
+          <div class="lifecycle-step-number">4</div>
+          <h3>Restore</h3>
+          <p>Bring an archived customer back to active status at any time.</p>
+        </div>
+        <div class="lifecycle-arrow" aria-hidden="true">→</div>
+        <div class="lifecycle-step">
+          <div class="lifecycle-step-number">5</div>
+          <h3>Search</h3>
+          <p>Find any customer, event, or audit entry instantly from the topbar.</p>
+        </div>
       </div>
     </section>
 
@@ -283,6 +354,135 @@
           <h3>Pipeline Monitor</h3>
           <p>An enterprise-monitoring-style view of the Kafka/outbox/retry/DLQ architecture — animated KPIs, a live pipeline visualization, and charts, with real and simulated data clearly labeled. See <a href="/demo/pipeline">/demo/pipeline</a>.</p>
         </article>
+      </div>
+    </section>
+
+    <section id="tech-stack">
+      <div class="section-heading">
+        <h2>Technology Stack</h2>
+        <p>Every layer of the platform, from the API down to the infrastructure that runs it.</p>
+      </div>
+
+      <div class="feature-grid">
+        <article class="feature-card">
+          <div class="icon">API</div>
+          <h3>API &amp; Validation</h3>
+          <p>FastAPI, Uvicorn, and Pydantic v2 for typed request/response models and OpenAPI 3.1 schema generation.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="icon">DB</div>
+          <h3>Data Layer</h3>
+          <p>SQLAlchemy 2.0 with typed <code>Mapped</code> columns, Alembic migrations, PostgreSQL in production/CI, SQLite locally.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="icon">EV</div>
+          <h3>Messaging</h3>
+          <p>Apache Kafka via <code>confluent-kafka</code>, with idempotent producer/consumer settings and a transactional outbox pattern.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="icon">QA</div>
+          <h3>Testing &amp; Quality</h3>
+          <p>pytest with real PostgreSQL/Kafka service containers in CI, Ruff for linting, and mypy in strict mode.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="icon">OPS</div>
+          <h3>Infrastructure</h3>
+          <p>Docker, Kubernetes manifests (Deployment/Service/HPA), and Terraform modules for AWS — all validated in CI.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="icon">UI</div>
+          <h3>Frontend</h3>
+          <p>Vanilla HTML/CSS/JS with no build step, Chart.js (vendored, no CDN) for dashboards, and a shared design system.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="security">
+      <div class="section-heading">
+        <h2>Security</h2>
+        <p>A hardened posture applied consistently across every route, not bolted on after the fact.</p>
+      </div>
+
+      <div class="feature-grid">
+        <article class="feature-card">
+          <div class="icon">CSP</div>
+          <h3>Strict Content-Security-Policy</h3>
+          <p><code>script-src 'self'</code>, no <code>unsafe-inline</code> or <code>unsafe-eval</code> anywhere — including the self-hosted Swagger UI and ReDoc pages.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="icon">KEY</div>
+          <h3>API-Key Authentication</h3>
+          <p><code>X-API-Key</code> header verified server-side; missing configuration fails closed with a <code>503</code> rather than allowing access.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="icon">LIM</div>
+          <h3>Rate Limiting</h3>
+          <p>Per-route limits via SlowAPI, with <code>429</code> responses and <code>X-RateLimit-*</code>/<code>Retry-After</code> headers.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="icon">LOG</div>
+          <h3>Audit Logging</h3>
+          <p>Structured JSON logs and a per-request audit trail — method, path, status, latency, client IP, and request ID.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="deployment">
+      <div class="section-heading">
+        <h2>Deployment</h2>
+        <p>The same container image runs locally, in CI, and on the live Railway deployment.</p>
+      </div>
+
+      <div class="feature-grid">
+        <article class="feature-card">
+          <div class="icon">DK</div>
+          <h3>Docker</h3>
+          <p>A multi-stage-ready <code>Dockerfile</code> and <code>docker-compose.yml</code> for local PostgreSQL + Kafka.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="icon">K8S</div>
+          <h3>Kubernetes</h3>
+          <p>Deployment, Service, ConfigMap, Secret, and HPA manifests with a non-root, read-only-filesystem security context.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="icon">TF</div>
+          <h3>Terraform</h3>
+          <p>AWS modules for VPC networking, RDS PostgreSQL, S3, and IAM — <code>terraform validate</code>-checked in CI.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="icon">RW</div>
+          <h3>Railway</h3>
+          <p>Builds this repository's <code>Dockerfile</code> directly; pushes to <code>main</code> trigger an automatic redeploy.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="opensource">
+      <div class="section-heading">
+        <h2>Open Source</h2>
+        <p>The full source, including this landing page, is public on GitHub.</p>
+      </div>
+
+      <div class="opensource-card">
+        <div class="opensource-body">
+          <h3>MIT Licensed</h3>
+          <p>Free to use, modify, and learn from — clone it, run it locally, or read through the architecture docs.</p>
+        </div>
+        <div class="opensource-actions">
+          <a class="btn btn-primary" href="https://github.com/pbolla1311/customer360-platform" target="_blank" rel="noopener noreferrer">View on GitHub</a>
+          <a class="btn btn-secondary" href="https://github.com/pbolla1311/customer360-platform/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">Read the License</a>
+        </div>
       </div>
     </section>
 

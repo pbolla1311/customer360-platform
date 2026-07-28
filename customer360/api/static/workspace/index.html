@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>{{APP_TITLE}} Cloud — Workspace</title>
 <meta name="description" content="Customer360 Cloud: an enterprise customer data platform workspace -- manage customers, track events, monitor the pipeline, and analyze business performance in one place."/>
-<link rel="shortcut icon" href="/static/swagger/favicon.png"/>
+<link rel="icon" type="image/svg+xml" href="/static/shared/brand/favicon.svg"/>
+<link rel="stylesheet" href="/static/shared/design-system.css"/>
 <link rel="stylesheet" href="/static/demo/demo.css"/>
 <link rel="stylesheet" href="/static/demo/pipeline/pipeline.css"/>
 <link rel="stylesheet" href="/static/workspace/workspace.css"/>
@@ -66,6 +67,7 @@
       <div class="ws-topbar-search">
         <label class="sr-only" for="ws-global-search">Search customers, events, and audit logs</label>
         <input id="ws-global-search" type="search" placeholder="Search customers, events, audit&hellip;" autocomplete="off" spellcheck="false"/>
+        <kbd class="ws-search-shortcut-hint" aria-hidden="true">/</kbd>
         <div class="ws-search-results is-hidden" id="ws-search-results" role="listbox" aria-label="Search results"></div>
       </div>
 
@@ -407,7 +409,9 @@
                 </tr>
               </thead>
               <tbody id="ws-event-table-body">
-                <tr><td colspan="10" class="ws-empty-hint">Loading events&hellip;</td></tr>
+                <tr><td colspan="10"><div class="skeleton skeleton-row"></div></td></tr>
+                <tr><td colspan="10"><div class="skeleton skeleton-row"></div></td></tr>
+                <tr><td colspan="10"><div class="skeleton skeleton-row"></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -660,7 +664,8 @@
                   <tr><th>User</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr>
                 </thead>
                 <tbody id="settings-users-body">
-                  <tr><td colspan="5" class="ws-empty-hint">Loading&hellip;</td></tr>
+                  <tr><td colspan="5"><div class="skeleton skeleton-row"></div></td></tr>
+                  <tr><td colspan="5"><div class="skeleton skeleton-row"></div></td></tr>
                 </tbody>
               </table>
             </div>
@@ -699,7 +704,8 @@
                   <tr><th>Email</th><th>Role</th><th>Status</th><th>Invited By</th><th>Sent</th><th>Actions</th></tr>
                 </thead>
                 <tbody id="invitations-body">
-                  <tr><td colspan="6" class="ws-empty-hint">Loading&hellip;</td></tr>
+                  <tr><td colspan="6"><div class="skeleton skeleton-row"></div></td></tr>
+                  <tr><td colspan="6"><div class="skeleton skeleton-row"></div></td></tr>
                 </tbody>
               </table>
             </div>
@@ -730,7 +736,8 @@
                   <tr><th>Name</th><th>Key</th><th>Status</th><th>Last Used</th><th>Actions</th></tr>
                 </thead>
                 <tbody id="apikeys-body">
-                  <tr><td colspan="5" class="ws-empty-hint">Loading&hellip;</td></tr>
+                  <tr><td colspan="5"><div class="skeleton skeleton-row"></div></td></tr>
+                  <tr><td colspan="5"><div class="skeleton skeleton-row"></div></td></tr>
                 </tbody>
               </table>
             </div>
@@ -742,6 +749,7 @@
   </div>
 </div>
 
+<script src="/static/shared/ui.js"></script>
 <script src="/static/demo/vendor/chart.umd.min.js"></script>
 <script src="/static/workspace/workspace.js"></script>
 <script src="/static/workspace/workspace-customers.js"></script>

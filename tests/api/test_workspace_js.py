@@ -11,6 +11,7 @@ dependency; it's skipped if Node isn't available locally.
 import json
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -382,3 +383,100 @@ def test_build_notifications_includes_accepted_invitations():
 
 def test_build_notifications_without_invitations_arg_still_works():
     assert _run_node("ws.buildNotifications([], [])") == []
+
+
+# ---------------------------------------------------------------------
+# v4.0 additions: Global Search match highlighting + recent searches
+# ---------------------------------------------------------------------
+
+
+def test_highlight_match_splits_on_case_insensitive_match():
+    segments = _run_node("ws.highlightMatch('Ada Lovelace', 'ada')")
+    assert segments == [
+        {"text": "Ada", "matched": True},
+        {"text": " Lovelace", "matched": False},
+    ]
+
+
+def test_highlight_match_finds_multiple_occurrences():
+    segments = _run_node("ws.highlightMatch('abcabc', 'a')")
+    matched_segments = [s for s in segments if s["matched"]]
+    assert len(matched_segments) == 2
+
+
+def test_highlight_match_empty_query_returns_single_unmatched_segment():
+    assert _run_node("ws.highlightMatch('hello', '')") == [{"text": "hello", "matched": False}]
+
+
+def test_highlight_match_no_match_returns_single_unmatched_segment():
+    assert _run_node("ws.highlightMatch('hello', 'zzz')") == [{"text": "hello", "matched": False}]
+
+
+def test_upsert_recent_search_prepends_new_query():
+    result = _run_node("ws.upsertRecentSearch(['b', 'a'], 'c')")
+    assert result == ["c", "b", "a"]
+
+
+def test_upsert_recent_search_deduplicates_case_insensitively():
+    result = _run_node("ws.upsertRecentSearch(['Ada', 'b'], 'ada')")
+    assert result == ["ada", "b"]
+
+
+def test_upsert_recent_search_caps_at_five():
+    result = _run_node("ws.upsertRecentSearch(['a', 'b', 'c', 'd', 'e'], 'f')")
+    assert result == ["f", "a", "b", "c", "d"]
+
+
+def test_upsert_recent_search_blank_query_leaves_list_unchanged():
+    assert _run_node("ws.upsertRecentSearch(['a', 'b'], '  ')") == ["a", "b"]
+
+
+# ---------------------------------------------------------------------
+# v4.0 additions: Notification Center grouping, icons, unread state
+# ---------------------------------------------------------------------
+
+
+def test_notification_icon_maps_known_severities():
+    assert _run_node("ws.notificationIcon('critical')") == "⛔"
+    assert _run_node("ws.notificationIcon('warning')") == "⚠️"
+    assert _run_node("ws.notificationIcon('ok')") == "✓"
+    assert _run_node("ws.notificationIcon('info')") == "ℹ️"
+
+
+def test_notification_icon_unknown_severity_falls_back_to_info():
+    assert _run_node("ws.notificationIcon('made-up')") == "ℹ️"
+
+
+def test_is_notification_unread_true_when_never_seen():
+    notification = {"timestamp": "2026-01-05T00:00:00"}
+    assert _run_node(f"ws.isNotificationUnread({json.dumps(notification)}, null)") is True
+
+
+def test_is_notification_unread_false_when_before_last_seen():
+    notification = {"timestamp": "2026-01-01T00:00:00"}
+    result = _run_node(f"ws.isNotificationUnread({json.dumps(notification)}, '2026-01-02T00:00:00')")
+    assert result is False
+
+
+def test_is_notification_unread_true_when_after_last_seen():
+    notification = {"timestamp": "2026-01-05T00:00:00"}
+    result = _run_node(f"ws.isNotificationUnread({json.dumps(notification)}, '2026-01-02T00:00:00')")
+    assert result is True
+
+
+def test_group_notifications_by_day_splits_today_vs_earlier():
+    now = datetime(2026, 1, 5, 12, 0, 0)
+    notifications = [
+        {"id": "today", "timestamp": "2026-01-05T08:00:00"},
+        {"id": "yesterday", "timestamp": "2026-01-04T08:00:00"},
+    ]
+    result = _run_node(
+        f"ws.groupNotificationsByDay({json.dumps(notifications)}, {int(now.timestamp() * 1000)})"
+    )
+    assert [n["id"] for n in result["today"]] == ["today"]
+    assert [n["id"] for n in result["earlier"]] == ["yesterday"]
+
+
+def test_group_notifications_by_day_empty_list():
+    now_ms = int(datetime(2026, 1, 5).timestamp() * 1000)
+    assert _run_node(f"ws.groupNotificationsByDay([], {now_ms})") == {"today": [], "earlier": []}

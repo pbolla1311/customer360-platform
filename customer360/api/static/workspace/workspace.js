@@ -290,6 +290,47 @@
     }).length;
   }
 
+  function isNotificationUnread(notification, lastSeenIso) {
+    if (!lastSeenIso) {
+      return true;
+    }
+    var ts = new Date(notification.timestamp).getTime();
+    var lastSeenMs = new Date(lastSeenIso).getTime();
+    return !isNaN(ts) && ts > lastSeenMs;
+  }
+
+  var NOTIFICATION_ICONS = {
+    critical: "⛔",
+    warning: "⚠️",
+    ok: "✓",
+    info: "ℹ️",
+  };
+
+  function notificationIcon(severity) {
+    return NOTIFICATION_ICONS[severity] || NOTIFICATION_ICONS.info;
+  }
+
+  // Splits a most-recent-first notification list into "today" (same
+  // calendar day as `nowMs`) and "earlier" buckets for the Notification
+  // Center's grouped display.
+  function groupNotificationsByDay(notifications, nowMs) {
+    var now = new Date(nowMs);
+    var todayKey = now.getFullYear() + "-" + now.getMonth() + "-" + now.getDate();
+    var groups = { today: [], earlier: [] };
+
+    (notifications || []).forEach(function (notification) {
+      var ts = new Date(notification.timestamp);
+      var key = ts.getFullYear() + "-" + ts.getMonth() + "-" + ts.getDate();
+      if (key === todayKey) {
+        groups.today.push(notification);
+      } else {
+        groups.earlier.push(notification);
+      }
+    });
+
+    return groups;
+  }
+
   // Client-side aggregation over data other views already fetch -- no new
   // backend endpoint. Grouped by result type so the dropdown can label
   // each section (Customers / Events / Audit).
@@ -351,6 +392,60 @@
     return result;
   }
 
+  // Splits `text` into an ordered list of { text, matched } segments around
+  // every case-insensitive occurrence of `query` -- returns structured data
+  // rather than an HTML string so callers build `<mark>` nodes with
+  // `textContent` (never `innerHTML`), avoiding any injection risk from
+  // search-result text that ultimately comes from customer-entered data.
+  function highlightMatch(text, query) {
+    var source = String(text || "");
+    var needle = String(query || "").trim();
+
+    if (!needle) {
+      return [{ text: source, matched: false }];
+    }
+
+    var lowerSource = source.toLowerCase();
+    var lowerNeedle = needle.toLowerCase();
+    var segments = [];
+    var cursor = 0;
+
+    while (cursor <= source.length) {
+      var index = lowerSource.indexOf(lowerNeedle, cursor);
+      if (index === -1) {
+        segments.push({ text: source.slice(cursor), matched: false });
+        break;
+      }
+      if (index > cursor) {
+        segments.push({ text: source.slice(cursor, index), matched: false });
+      }
+      segments.push({ text: source.slice(index, index + needle.length), matched: true });
+      cursor = index + needle.length;
+    }
+
+    return segments.filter(function (segment) {
+      return segment.text.length > 0;
+    });
+  }
+
+  var RECENT_SEARCHES_MAX = 5;
+
+  // Pure list-management logic for the "recent searches" feature --
+  // most-recent-first, deduplicated case-insensitively, capped at
+  // RECENT_SEARCHES_MAX. Persistence (localStorage) is the DOM layer's job.
+  function upsertRecentSearch(list, query) {
+    var trimmed = String(query || "").trim();
+    if (!trimmed) {
+      return (list || []).slice(0, RECENT_SEARCHES_MAX);
+    }
+    var lower = trimmed.toLowerCase();
+    var deduped = (list || []).filter(function (existing) {
+      return String(existing || "").toLowerCase() !== lower;
+    });
+    deduped.unshift(trimmed);
+    return deduped.slice(0, RECENT_SEARCHES_MAX);
+  }
+
   var WorkspaceLogic = {
     VIEWS: VIEWS,
     parseViewFromHash: parseViewFromHash,
@@ -363,7 +458,12 @@
     CUSTOMER_UPDATE_EVENT_TYPES: CUSTOMER_UPDATE_EVENT_TYPES,
     buildNotifications: buildNotifications,
     countUnread: countUnread,
+    isNotificationUnread: isNotificationUnread,
+    notificationIcon: notificationIcon,
+    groupNotificationsByDay: groupNotificationsByDay,
     runGlobalSearch: runGlobalSearch,
+    highlightMatch: highlightMatch,
+    upsertRecentSearch: upsertRecentSearch,
     canView: canView,
     roleLabel: roleLabel,
     initialsFor: initialsFor,
@@ -826,6 +926,56 @@
     var searchInput = document.getElementById("ws-global-search");
     var searchResultsEl = document.getElementById("ws-search-results");
     var searchCache = null; // { customers, history } -- fetched lazily, once
+    var RECENT_SEARCHES_KEY = "ws-recent-searches";
+
+    function readRecentSearches() {
+      try {
+        var raw = window.localStorage.getItem(RECENT_SEARCHES_KEY);
+        var parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (err) {
+        return [];
+      }
+    }
+
+    function saveRecentSearch(query) {
+      try {
+        var updated = WorkspaceLogic.upsertRecentSearch(readRecentSearches(), query);
+        window.localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));
+      } catch (err) {
+        // localStorage unavailable (private browsing, quota) -- recent
+        // searches just won't persist; search itself still works.
+      }
+    }
+
+    function renderRecentSearches() {
+      var recent = readRecentSearches();
+      clearChildren(searchResultsEl);
+
+      if (recent.length === 0) {
+        searchResultsEl.classList.add("is-hidden");
+        return;
+      }
+
+      var groupLabel = document.createElement("div");
+      groupLabel.className = "ws-search-group-label";
+      groupLabel.textContent = "Recent searches";
+      searchResultsEl.appendChild(groupLabel);
+
+      recent.forEach(function (query) {
+        var item = document.createElement("button");
+        item.type = "button";
+        item.className = "ws-search-result ws-search-result--recent";
+        item.textContent = query;
+        item.addEventListener("click", function () {
+          searchInput.value = query;
+          runSearch();
+        });
+        searchResultsEl.appendChild(item);
+      });
+
+      searchResultsEl.classList.remove("is-hidden");
+    }
 
     function loadSearchCache() {
       if (searchCache) {
@@ -840,7 +990,20 @@
       });
     }
 
-    function renderSearchGroup(container, label, items) {
+    function appendHighlighted(el, text, query) {
+      WorkspaceLogic.highlightMatch(text, query).forEach(function (segment) {
+        if (segment.matched) {
+          var mark = document.createElement("mark");
+          mark.className = "ws-search-highlight";
+          mark.textContent = segment.text;
+          el.appendChild(mark);
+        } else {
+          el.appendChild(document.createTextNode(segment.text));
+        }
+      });
+    }
+
+    function renderSearchGroup(container, label, items, query) {
       if (items.length === 0) {
         return;
       }
@@ -853,9 +1016,14 @@
         var link = document.createElement("a");
         link.className = "ws-search-result";
         link.href = item.href;
-        link.textContent = item.label + (item.meta ? " — " + item.meta : "");
+        appendHighlighted(link, item.label, query);
+        if (item.meta) {
+          link.appendChild(document.createTextNode(" — "));
+          appendHighlighted(link, item.meta, query);
+        }
         link.addEventListener("click", function () {
           hideSearchResults();
+          saveRecentSearch(searchInput.value);
           searchInput.value = "";
         });
         container.appendChild(link);
@@ -871,7 +1039,7 @@
     function runSearch() {
       var query = searchInput.value;
       if (!query.trim()) {
-        hideSearchResults();
+        renderRecentSearches();
         return;
       }
 
@@ -881,14 +1049,25 @@
 
         var total = result.customers.length + result.events.length + result.audit.length;
         if (total === 0) {
-          var empty = document.createElement("div");
-          empty.className = "ws-empty-hint";
-          empty.textContent = "No matches.";
-          searchResultsEl.appendChild(empty);
+          if (window.UI) {
+            searchResultsEl.appendChild(
+              window.UI.emptyState({
+                icon: "🔍",
+                title: "No results found",
+                description: 'Try a different name, email, customer ID, or event type for "' + query + '".',
+              })
+            );
+          } else {
+            var empty = document.createElement("div");
+            empty.className = "ws-empty-hint";
+            empty.textContent = "No matches.";
+            searchResultsEl.appendChild(empty);
+          }
         } else {
-          renderSearchGroup(searchResultsEl, "Customers", result.customers);
-          renderSearchGroup(searchResultsEl, "Events", result.events);
-          renderSearchGroup(searchResultsEl, "Audit", result.audit);
+          renderSearchGroup(searchResultsEl, "Customers", result.customers, query);
+          renderSearchGroup(searchResultsEl, "Events", result.events, query);
+          renderSearchGroup(searchResultsEl, "Audit", result.audit, query);
+          saveRecentSearch(query);
         }
 
         searchResultsEl.classList.remove("is-hidden");
@@ -897,6 +1076,11 @@
 
     if (searchInput) {
       searchInput.addEventListener("input", runSearch);
+      searchInput.addEventListener("focus", function () {
+        if (!searchInput.value.trim()) {
+          renderRecentSearches();
+        }
+      });
       searchInput.addEventListener("keydown", function (event) {
         if (event.key === "Escape") {
           hideSearchResults();
@@ -907,6 +1091,26 @@
         if (!searchInput.contains(event.target) && !searchResultsEl.contains(event.target)) {
           hideSearchResults();
         }
+      });
+
+      // "/" or Cmd/Ctrl+K focuses search from anywhere in the workspace,
+      // as long as focus isn't already inside a text input/textarea/select
+      // (so typing "/" in a customer-edit field doesn't hijack focus).
+      document.addEventListener("keydown", function (event) {
+        var isShortcut = event.key === "/" || ((event.metaKey || event.ctrlKey) && event.key === "k");
+        if (!isShortcut) {
+          return;
+        }
+        var active = document.activeElement;
+        var isTyping =
+          active &&
+          (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT");
+        if (isTyping && event.key === "/") {
+          return;
+        }
+        event.preventDefault();
+        searchInput.focus();
+        searchInput.select();
       });
     }
 
@@ -944,6 +1148,39 @@
       notifBadge.classList.toggle("is-hidden", unread === 0);
     }
 
+    function renderNotifItem(notification, nowMs, lastSeenIso) {
+      var li = document.createElement("li");
+      li.className =
+        "ws-notif-item ws-alert--" + (notification.severity === "ok" ? "healthy" : notification.severity);
+
+      var icon = document.createElement("span");
+      icon.className = "ws-notif-item-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.textContent = WorkspaceLogic.notificationIcon(notification.severity);
+      li.appendChild(icon);
+
+      var body = document.createElement("span");
+      body.className = "ws-notif-item-body";
+      var title = document.createElement("span");
+      title.className = "ws-item-title";
+      title.textContent = notification.title;
+      var meta = document.createElement("span");
+      meta.className = "ws-item-meta";
+      meta.textContent = notification.meta + " · " + relativeTimeLabel(notification.timestamp, nowMs);
+      body.appendChild(title);
+      body.appendChild(meta);
+      li.appendChild(body);
+
+      if (WorkspaceLogic.isNotificationUnread(notification, lastSeenIso)) {
+        var dot = document.createElement("span");
+        dot.className = "ws-notif-unread-dot";
+        dot.setAttribute("aria-label", "Unread");
+        li.appendChild(dot);
+      }
+
+      return li;
+    }
+
     function renderNotifList() {
       if (!notifList) {
         return;
@@ -951,27 +1188,48 @@
       clearChildren(notifList);
 
       if (latestNotifications.length === 0) {
-        var empty = document.createElement("li");
-        empty.className = "ws-empty-hint";
-        empty.textContent = "No notifications yet.";
-        notifList.appendChild(empty);
+        if (window.UI) {
+          var emptyWrap = document.createElement("li");
+          emptyWrap.appendChild(
+            window.UI.emptyState({
+              icon: "🔔",
+              title: "No notifications yet",
+              description: "Failures, recoveries, customer edits, and accepted invitations will show up here.",
+            })
+          );
+          notifList.appendChild(emptyWrap);
+        } else {
+          var empty = document.createElement("li");
+          empty.className = "ws-empty-hint";
+          empty.textContent = "No notifications yet.";
+          notifList.appendChild(empty);
+        }
         return;
       }
 
       var nowMs = Date.now();
-      latestNotifications.slice(0, 20).forEach(function (notification) {
-        var li = document.createElement("li");
-        li.className = "ws-alert--" + (notification.severity === "ok" ? "healthy" : notification.severity);
-        var title = document.createElement("span");
-        title.className = "ws-item-title";
-        title.textContent = notification.title;
-        var meta = document.createElement("span");
-        meta.className = "ws-item-meta";
-        meta.textContent = notification.meta + " · " + relativeTimeLabel(notification.timestamp, nowMs);
-        li.appendChild(title);
-        li.appendChild(meta);
-        notifList.appendChild(li);
-      });
+      var lastSeenIso = readLastSeen();
+      var grouped = WorkspaceLogic.groupNotificationsByDay(latestNotifications.slice(0, 20), nowMs);
+
+      if (grouped.today.length > 0) {
+        var todayLabel = document.createElement("li");
+        todayLabel.className = "ws-search-group-label ws-notif-group-label";
+        todayLabel.textContent = "Today";
+        notifList.appendChild(todayLabel);
+        grouped.today.forEach(function (notification) {
+          notifList.appendChild(renderNotifItem(notification, nowMs, lastSeenIso));
+        });
+      }
+
+      if (grouped.earlier.length > 0) {
+        var earlierLabel = document.createElement("li");
+        earlierLabel.className = "ws-search-group-label ws-notif-group-label";
+        earlierLabel.textContent = "Earlier";
+        notifList.appendChild(earlierLabel);
+        grouped.earlier.forEach(function (notification) {
+          notifList.appendChild(renderNotifItem(notification, nowMs, lastSeenIso));
+        });
+      }
     }
 
     function loadNotifications() {

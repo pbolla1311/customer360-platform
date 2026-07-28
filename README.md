@@ -8,7 +8,8 @@
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Type Checking](https://img.shields.io/badge/mypy-strict-2A6DB2?style=flat-square)](https://mypy-lang.org/)
 [![Lint](https://img.shields.io/badge/lint-ruff-D7FF64?style=flat-square)](https://docs.astral.sh/ruff/)
-[![Tests](https://img.shields.io/badge/tests-68%20passing-brightgreen?style=flat-square)](https://github.com/pbolla1311/customer360-platform/tree/main/tests)
+[![Tests](https://img.shields.io/badge/tests-465%20passing-brightgreen?style=flat-square)](https://github.com/pbolla1311/customer360-platform/tree/main/tests)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
@@ -19,9 +20,31 @@
 [![Terraform](https://img.shields.io/badge/Terraform-7B42BC?style=flat-square&logo=terraform&logoColor=white)](https://www.terraform.io/)
 [![Railway](https://img.shields.io/badge/Railway-0B0D0E?style=flat-square&logo=railway&logoColor=white)](https://railway.app/)
 
+<br/>
+
+<img src="docs/images/social-preview.png" alt="Customer360 Platform — enterprise backend and data engineering" width="820"/>
+
 </div>
 
 ---
+
+## Table of Contents
+
+- [Live Demo](#live-demo)
+- [Quick Start](#quick-start)
+- [Customer360 Cloud Workspace](#customer360-cloud-workspace)
+- [Demo Dashboard](#demo-dashboard)
+- [Pipeline Monitor](#pipeline-monitor)
+- [Screenshots](#screenshots)
+- [Overview](#overview) · [Why This Project](#why-this-project) · [Key Features](#key-features)
+- [Architecture](#architecture) · [Architecture Diagram](#architecture-diagram) · [Request and Event Flow](#request-and-event-flow)
+- [Technology Stack](#technology-stack) · [API Endpoints](#api-endpoints) · [Data Model](#data-model)
+- [Reliability Patterns](#reliability-patterns) · [Security](#security) · [Observability](#observability)
+- [Testing and Code Quality](#testing-and-code-quality)
+- [Local Development](#local-development) · [Docker Setup](#docker-setup) · [Database Migrations](#database-migrations)
+- [Kubernetes Deployment](#kubernetes-deployment) · [Terraform Infrastructure](#terraform-infrastructure) · [Railway Deployment](#railway-deployment)
+- [Engineering Decisions](#engineering-decisions) · [Limitations](#limitations) · [Roadmap](#roadmap)
+- [Contributing](#contributing) · [License](#license) · [Author](#author)
 
 ## Live Demo
 
@@ -36,6 +59,21 @@ The API is deployed and publicly reachable on Railway.
 | OpenAPI schema | <https://customer360-platform-production.up.railway.app/openapi.json> |
 
 > The `/customers` endpoints require an `X-API-Key` header, verified server-side against the `API_KEY` environment variable. That variable isn't currently set on the live Railway deployment, so `/customers` there returns `503 API security is not configured` rather than serving data — the endpoint fails closed instead of silently allowing access. It works end-to-end locally and in CI, where `API_KEY` is set. Everything else — root, health, readiness, docs, and the OpenAPI schema — is open on the live demo.
+
+---
+
+## Quick Start
+
+```bash
+git clone https://github.com/pbolla1311/customer360-platform.git
+cd customer360-platform
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env
+uvicorn customer360.api.main:app --reload
+```
+
+Open <http://localhost:8000/workspace> — no external services required; the app falls back to a local SQLite database when `DATABASE_URL` is unset. See [Local Development](#local-development) for the full walkthrough and [Docker Setup](#docker-setup) for PostgreSQL/Kafka parity with CI.
 
 ---
 
@@ -235,6 +273,8 @@ New endpoints, same unauthenticated/excluded-from-schema treatment as the rest o
 <br/><sub><b>Event processing flow</b> — batch ingestion, Kafka publish, dead-letter fallback, idempotent consumption</sub>
 
 </div>
+
+> **Animated GIFs and a demo video are not yet captured.** No screen-recording tool is available in this project's current environment, so — same convention as the [Demo Dashboard](#demo-dashboard-screenshot-checklist) and [Pipeline Monitor](#pipeline-monitor-screenshot-checklist) screenshot checklists below — this is an honest gap rather than a placeholder pretending to be real. The live Railway deployment linked at the top of this README is the closest thing to a live demo today.
 
 ---
 
@@ -774,6 +814,14 @@ Designed and built a production-style customer data platform end to end: a versi
 - Diagnosed and fixed a real browser-level CSP bug (ReDoc's runtime `styled-components` style injection) by patching `document.createElement` with a per-request cryptographic nonce — verified against a real headless Chrome session, not just static assertions.
 - Implemented two independent retry/dead-letter strategies (producer-level immediate DLQ redirect, outbox-level exponential backoff) and covered both with unit tests plus a live Kafka round-trip integration test run in CI.
 - Kept infrastructure honest: Kubernetes and Terraform are implemented and validated in CI, clearly documented as not continuously deployed, rather than overstated as "in production."
+
+## Contributing
+
+Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, the checks CI runs (`pytest`, `ruff`, `mypy`, the Node-backed frontend tests), and the backward-compatibility guidelines this project follows.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ## Author
 
